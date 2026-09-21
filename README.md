@@ -49,6 +49,24 @@ Open **http://localhost:8787**, sign in and import the original spreadsheets thr
 
 ## Host on Cloudflare
 
+### Git-connected Cloudflare Builds
+
+In your Worker's **Settings → Builds**, use these commands with the repository root as the root directory:
+
+| Setting | Value |
+| --- | --- |
+| Build command | `npm run build` |
+| Deploy command | `npm run deploy` |
+| Non-production branch deploy command (if enabled) | `npm run deploy:preview` |
+
+The build command prepares the Python dependencies and validates the Worker with a deployment dry run. It does not publish anything. The deploy command uses Pywrangler to package Python dependencies before publishing. Preview uploads create a version without promoting it to production.
+
+If a build reports `Missing script: "build"`, ensure the commit being built contains the updated `package.json`, then retry. The npm install-script notices in the supplied log were warnings; the missing build script caused that failure. Cloud resource and secret setup below is still required.
+
+See [Cloudflare Builds configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/) and [Python dependency packaging](https://developers.cloudflare.com/workers/languages/python/packages/).
+
+### Initial resource setup
+
 This deploys a full application on **Workers**, not a static-only Pages project. Your account must have Workers, D1 and R2 enabled. No cloud resources are created by the local build or test commands.
 
 1. Install dependencies above, then authenticate:

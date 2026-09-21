@@ -2,8 +2,10 @@
   "name": "misb-manager",
   "private": true,
   "scripts": {
+    "build": "uv run pywrangler deploy --dry-run",
     "dev": "uv run pywrangler dev",
     "deploy": "uv run pywrangler deploy",
+    "deploy:preview": "uv run pywrangler versions upload",
     "check:deploy": "uv run pywrangler deploy --dry-run",
     "test": "python -m unittest discover -s tests -v"
   },
