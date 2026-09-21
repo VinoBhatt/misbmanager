@@ -1,0 +1,14 @@
+{
+  "name": "misb-manager",
+  "private": true,
+  "scripts": {
+    "dev": "uv run pywrangler dev",
+    "deploy": "uv run pywrangler deploy",
+    "check:deploy": "uv run pywrangler deploy --dry-run",
+    "test": "python -m unittest discover -s tests -v"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "wrangler": "latest"
+  }
+}

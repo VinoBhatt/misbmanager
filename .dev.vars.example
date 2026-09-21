@@ -1,0 +1,3 @@
+# Set unique values before starting the Cloudflare local emulator.
+APP_PASSWORD=replace-with-a-long-private-password
+SESSION_SECRET=replace-with-a-random-secret-at-least-32-characters-long
