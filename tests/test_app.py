@@ -1,3 +1,4 @@
+from contextlib import closing
 import importlib.util
 import io
 import os
@@ -104,7 +105,9 @@ class WebsiteTests(unittest.TestCase):
     def test_valid_upload_preserves_backup(self):
         response=self.client.post('/api/upload/transactions',data={'file':(io.BytesIO((self.seed/'transactions.xlsx').read_bytes()),'transactions.xlsx')})
         self.assertEqual(response.status_code,200)
-        self.assertTrue((Path(self.directory.name)/response.json['backup']).exists())
+        import sqlite3
+        with closing(sqlite3.connect(Path(self.directory.name)/'misb_tracker.db')) as con, con:
+            self.assertIsNotNone(con.execute('SELECT 1 FROM workbook_versions WHERE object_key=?',(response.json['backup'],)).fetchone())
         self.assertEqual(self.client.get('/api/data').json['summary'],self.original_payload['summary'])
 
     def test_empty_workspace_accepts_first_import(self):

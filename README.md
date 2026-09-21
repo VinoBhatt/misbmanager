@@ -8,8 +8,7 @@ Includes Fund Overview, Issuer Exposure, Receivables, Profit Analytics, Active P
 
 - Python Workers / Flask: calculations, authenticated API and Excel generation.
 - Workers Static Assets: responsive HTML, CSS and JavaScript.
-- D1: monitoring, payment marks, issuer settings, cashflow plans and workbook version pointers.
-- Private R2: uploaded workbooks and previous versions. Files are never served as public assets.
+- D1: monitoring, payment marks, issuer settings, cashflow plans, uploaded workbooks and previous workbook versions. Files are never served as public assets. No R2 account or bucket is required.
 - Shared workspace password and signed eight-hour HttpOnly session. This is a single shared workspace, without per-user roles or a user audit trail.
 
 ## Preview on this computer
@@ -67,7 +66,7 @@ See [Cloudflare Builds configuration](https://developers.cloudflare.com/workers/
 
 ### Initial resource setup
 
-This deploys a full application on **Workers**, not a static-only Pages project. Your account must have Workers, D1 and R2 enabled. No cloud resources are created by the local build or test commands.
+This deploys a full application on **Workers**, not a static-only Pages project. Your account must have Workers and D1 enabled. No cloud resources are created by the local build or test commands.
 
 1. Install dependencies above, then authenticate:
 
@@ -75,14 +74,13 @@ This deploys a full application on **Workers**, not a static-only Pages project.
    npx wrangler login
    ```
 
-2. Create the database and private workbook bucket:
+2. Create the database (skip this if `misb-manager` already exists):
 
    ```powershell
    npx wrangler d1 create misb-manager
-   npx wrangler r2 bucket create misb-manager-files
    ```
 
-   Add the returned `database_id` to the `d1_databases` entry in `wrangler.jsonc`. If you change the bucket name, update `r2_buckets` too.
+   Add the returned `database_id` to the `d1_databases` entry in `wrangler.jsonc`.
 
 3. Apply the schema:
 
@@ -110,15 +108,18 @@ This deploys a full application on **Workers**, not a static-only Pages project.
 
 7. Optionally add your domain in Cloudflare Dashboard → Workers & Pages → misbmanager → Settings → Domains & Routes.
 
-### Deployment error: R2 bucket not found (10085)
+### Updating an existing installation
 
-Create a **private** R2 bucket named exactly `misb-manager-files` in the same Cloudflare account as the Worker, using R2 Object Storage → Create bucket, or `npx wrangler r2 bucket create misb-manager-files`. Then retry deployment. Enable R2 in the account first if prompted.
+The application now stores workbooks entirely in D1. Apply all migrations before deploying:
 
-If a previous deployment already provisioned the D1 database `misb-manager`, reuse it instead of creating another. Copy its Database ID from D1 → misb-manager into the `database_id` field of the `DB` entry in `wrangler.jsonc`, then initialize its tables with `npx wrangler d1 migrations apply misb-manager --remote`.
+```powershell
+npx wrangler d1 migrations apply misb-manager --remote
+npm run deploy
+```
 
-The Worker is named `misbmanager`; the database remains `misb-manager` and the bucket remains `misb-manager-files`. These are separate resources with intentionally different names. Set `APP_PASSWORD` and `SESSION_SECRET` on the `misbmanager` Worker after deployment, as described above.
+Migration `0002_workbook_storage.sql` adds workbook storage without altering existing monitoring or payment records. It has already been applied to this project's configured cloud database. Fresh installations still need both migrations. The Worker is named `misbmanager`; its database is `misb-manager`.
 
-Future deployments preserve D1 and R2 data. Changing `SESSION_SECRET` signs everyone out. For named users and organization sign-in, Cloudflare Access can be added later.
+Existing local preview files are imported into SQLite automatically on the next `scripts/local.py` startup. If workbooks were uploaded to an earlier R2 installation, re-import those originals through Data Sources; remote R2 data is not copied or deleted automatically.
 
 ### Carry over existing monitoring and payment records
 
@@ -133,7 +134,7 @@ Use this once on a new database before editing cloud records. It imports monitor
 
 ## Workbook handling
 
-Uploads accept `.xlsx` files up to 10 MB, with bounded archive expansion. Required columns and calculations are validated before publishing the new version. Rejected uploads leave the current version intact. Each successful upload keeps its predecessor in R2 under `sources/`; no retention deletion runs automatically. D1's `sources` table identifies the current versions.
+Uploads accept `.xlsx` files up to 10 MB, with bounded archive expansion. Required columns and calculations are validated before publishing the new version. Rejected uploads leave the current version intact. Workbooks are stored as ordered, base64-encoded chunks in D1, with a size and SHA-256 integrity check. The complete workbook and current-version pointer are saved in one atomic transaction. Chunking preserves the 10 MB upload allowance while staying within D1 row limits. Each successful upload retains its predecessor in the database; no retention deletion runs automatically. Base64 encoding adds approximately one-third storage overhead. D1's `sources` table identifies the current versions.
 
 Excel exports preserve the simulation template's sheets, formulas, styling and Remarks. Excel recalculates formulas when opening the updated simulation. The bi-weekly report is a current monitoring snapshot: its report date labels the report and does not filter historical activity. Simulation Copy supports its original ledger cut-off workflow.
 

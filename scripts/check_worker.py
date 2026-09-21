@@ -45,7 +45,7 @@ for kind,filename in [('transactions','transactions.xlsx'),('simulation','simula
              'Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n').encode()+data+f'\r\n--{boundary}--\r\n'.encode()
     status,body=request('/api/upload/'+kind,payload,{'Content-Type':'multipart/form-data; boundary='+boundary})
     assert status==200,(kind,status,body[:500])
-    print(f'Worker {kind} import and R2 persistence passed',flush=True)
+    print(f'Worker {kind} import and D1 workbook persistence passed',flush=True)
 status,body=request('/api/data')
 assert status==200,(status,body[:500])
 data=json.loads(body)

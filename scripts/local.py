@@ -12,9 +12,17 @@ sys.path.insert(0,str(ROOT/'src'))
 def initialize(directory, seed=None):
     directory.mkdir(parents=True,exist_ok=True)
     con=sqlite3.connect(directory/'misb_tracker.db')
-    con.executescript((ROOT/'migrations/0001_initial.sql').read_text())
+    for migration in sorted((ROOT/'migrations').glob('*.sql')):
+        con.executescript(migration.read_text())
+    from storage import workbook_statements
+    # Carry existing local workbook files into SQLite without changing pointers.
+    for key, in con.execute('SELECT object_key FROM sources').fetchall():
+        if not con.execute('SELECT 1 FROM workbook_versions WHERE object_key=?',(key,)).fetchone():
+            path=(directory/key).resolve()
+            if path.is_relative_to(directory.resolve()) and path.is_file():
+                for sql, params in workbook_statements(key,path.read_bytes()):
+                    con.execute(sql,params)
     if seed:
-        import shutil
         import json
         mapping={'transactions':'transactions.xlsx','simulation':'simulation.xlsx','projections':'midas_projections.xlsx'}
         for kind,filename in mapping.items():
@@ -23,9 +31,8 @@ def initialize(directory, seed=None):
             source=seed/filename
             if source.exists():
                 key='sources/initial/'+filename
-                target=directory/key
-                target.parent.mkdir(parents=True,exist_ok=True)
-                shutil.copyfile(source,target)
+                for sql, params in workbook_statements(key,source.read_bytes()):
+                    con.execute(sql,params)
                 meta=seed/'source_meta.json'
                 as_of=json.loads(meta.read_text()).get('simulation_as_of','') if meta.exists() else ''
                 con.execute('INSERT INTO sources(kind,object_key,as_of) VALUES(?,?,?)',(kind,key,as_of))
