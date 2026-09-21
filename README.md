@@ -51,7 +51,7 @@ Open **http://localhost:8787**, sign in and import the original spreadsheets thr
 
 ### Git-connected Cloudflare Builds
 
-In your Worker's **Settings → Builds**, use these commands with the repository root as the root directory:
+In the **misbmanager** Worker's **Settings → Builds**, use these commands with the repository root as the root directory:
 
 | Setting | Value |
 | --- | --- |
@@ -108,7 +108,15 @@ This deploys a full application on **Workers**, not a static-only Pages project.
 
 6. Open the `workers.dev` URL printed by deployment. Sign in, then import `transactions.xlsx`, `simulation.xlsx`, and optionally `midas_projections.xlsx` from the extracted ZIP under **Data Sources**. Set the simulation cut-off date from `data/source_meta.json`. Existing monitoring/payment records are not automatically uploaded; see below.
 
-7. Optionally add your domain in Cloudflare Dashboard → Workers & Pages → misb-manager → Settings → Domains & Routes.
+7. Optionally add your domain in Cloudflare Dashboard → Workers & Pages → misbmanager → Settings → Domains & Routes.
+
+### Deployment error: R2 bucket not found (10085)
+
+Create a **private** R2 bucket named exactly `misb-manager-files` in the same Cloudflare account as the Worker, using R2 Object Storage → Create bucket, or `npx wrangler r2 bucket create misb-manager-files`. Then retry deployment. Enable R2 in the account first if prompted.
+
+If a previous deployment already provisioned the D1 database `misb-manager`, reuse it instead of creating another. Copy its Database ID from D1 → misb-manager into the `database_id` field of the `DB` entry in `wrangler.jsonc`, then initialize its tables with `npx wrangler d1 migrations apply misb-manager --remote`.
+
+The Worker is named `misbmanager`; the database remains `misb-manager` and the bucket remains `misb-manager-files`. These are separate resources with intentionally different names. Set `APP_PASSWORD` and `SESSION_SECRET` on the `misbmanager` Worker after deployment, as described above.
 
 Future deployments preserve D1 and R2 data. Changing `SESSION_SECRET` signs everyone out. For named users and organization sign-in, Cloudflare Access can be added later.
 
