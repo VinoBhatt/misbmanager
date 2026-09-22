@@ -6,6 +6,9 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import openpyxl
 
 CENT = Decimal('0.01')
+SERVICE_RATE = Decimal('0.20')
+SST_RATE = Decimal('0.08')
+SST_START = date(2026, 8, 1)
 MONTHS = ('January','February','March','April','May','June','July','August','September','October','November','December')
 
 
@@ -95,61 +98,129 @@ def statement_data(data, as_of=None):
         'total_investment':sum((r['amount'] for r in rows if r['description']=='Investment Committed'),Decimal(0)),
         'principal_received':sum((r['amount'] for r in rows if r['description']=='Principal Payout'),Decimal(0)),
         'nett_returns':sum((r['amount'] for r in rows if r['description']=='Profit Payout'),Decimal(0))}
+    detailed, gross_total, service_total, sst_total = [], Decimal(0), Decimal(0), Decimal(0)
+    for r in rows:
+        if r['description'] != 'Profit Payout':
+            detailed.append(r)
+            continue
+        taxable = r['timestamp'].date() >= SST_START
+        divisor = Decimal('0.784') if taxable else Decimal('0.80')
+        gross = (r['amount'] / divisor).quantize(CENT, rounding=ROUND_HALF_UP)
+        service = (gross * SERVICE_RATE).quantize(CENT, rounding=ROUND_HALF_UP)
+        sst = (service * SST_RATE).quantize(CENT, rounding=ROUND_HALF_UP) if taxable else Decimal(0)
+        common = {'timestamp':r['timestamp'],'order':r['order'],'note':r['note']}
+        detailed.append({**common,'description':'Gross Profit','previous':r['previous'],
+                         'amount':gross,'current':None})
+        detailed.append({**common,'description':'Service Charge','previous':None,
+                         'amount':-service,'current':None})
+        if taxable:
+            detailed.append({**common,'description':'SST','previous':None,
+                             'amount':-sst,'current':None})
+        detailed.append({**common,'description':'Net Profit','previous':None,
+                         'amount':r['amount'],'current':r['current']})
+        gross_total += gross; service_total += service; sst_total += sst
+    totals.update(total_gross_returns=gross_total, service_fee=service_total, sst=sst_total)
+    def value(amount):
+        return '' if amount is None else format(amount,'.2f')
     return {'as_of':cutoff.isoformat(),'latest_date':transactions[-1]['timestamp'].date().isoformat(),
         'investor_id':'5490','investor_name':'Amanahraya Trustees Berhad',
         'summary':{k:format(v,'.2f') for k,v in totals.items()},
         'rows':[{'date':r['timestamp'].strftime('%d-%b-%Y %H:%M:%S'),'description':r['description'],
-                 'note':r['note'],**{k:format(r[k],'.2f') for k in ('previous','amount','current')}} for r in rows],
-        'row_count':len(rows),'page_count':1+max(0,(len(rows)-29+54)//55),'warnings':warnings}
+                 'note':r['note'],**{k:value(r[k]) for k in ('previous','amount','current')}} for r in detailed],
+        'row_count':len(detailed),'page_count':1+max(0,(len(detailed)-33+57)//58),'warnings':warnings}
 
 
 def statement_pdf(statement):
     # Lazy imports keep the Worker startup path small.
     from pypdf import PdfReader, PdfWriter
+    from pypdf._cmap import get_encoding
     from pypdf.generic import NameObject, DecodedStreamObject
     from statement_template import TEMPLATE
     reader=PdfReader(io.BytesIO(TEMPLATE)); writer=PdfWriter()
     first=writer.add_page(reader.pages[0])
     fonts=first['/Resources']['/Font']
 
-    def width(text,font,size):
-        f=fonts[font].get_object(); widths=f['/Widths']; start=int(f['/FirstChar'])
-        encoded=text.encode('cp1252')
-        return sum(float(widths[c-start]) if 0<=c-start<len(widths) else 0 for c in encoded)*size/1000
+    def font_info(name):
+        font=fonts[name].get_object()
+        if '/DescendantFonts' not in font:
+            return None
+        reverse={value:key for key,value in get_encoding(font)[1].items()}
+        descendant=font['/DescendantFonts'][0].get_object(); widths={}
+        values=descendant.get('/W',[])
+        if hasattr(values,'get_object'): values=values.get_object()
+        i=0
+        while i < len(values):
+            start=int(values[i]); following=values[i+1]
+            if isinstance(following,list):
+                for offset,item in enumerate(following): widths[start+offset]=float(item)
+                i+=2
+            else:
+                end=int(following); item=float(values[i+2])
+                for code in range(start,end+1): widths[code]=item
+                i+=3
+        return reverse,widths,float(descendant.get('/DW',1000))
+
+    font_data={name:font_info(name) for name in ('/F1','/F3')}
+
+    def encoded_text(value,font):
+        info=font_data.get(font)
+        if info is None:
+            raw=value.encode('cp1252')
+            f=fonts[font].get_object(); widths=f['/Widths']; start=int(f['/FirstChar'])
+            return raw,sum(float(widths[c-start]) if 0<=c-start<len(widths) else 0 for c in raw)
+        reverse,widths,default=info; raw=bytearray(); total=0
+        for character in value:
+            code_text=reverse.get(character)
+            if code_text is None:
+                raise ValueError(f'The statement font cannot render {character!r}')
+            for item in code_text:
+                code=ord(item);raw.extend(code.to_bytes(2,'big'));total+=widths.get(code,default)
+        return bytes(raw),total
+
+    def width(value,font,size):
+        return encoded_text(value,font)[1]*size/1000
 
     def text(text,x,y,size=6.96,font='/F1',align='left'):
         w=width(text,font,size)
         if align=='right': x-=w
         if align=='center': x-=w/2
-        literal=text.encode('cp1252').hex()
+        literal=encoded_text(text,font)[0].hex()
         return f'BT 0 g {font} {size} Tf 1 0 0 1 {x:.4f} {792-y:.4f} Tm <{literal}> Tj ET\n'
 
     cutoff=date.fromisoformat(statement['as_of'])
     title=f'ACCOUNT STATEMENT (YEAR TO DAY- {cutoff.day} {MONTHS[cutoff.month-1]} {cutoff:%y})'
-    first_ops=text(title,302.9,197.69,11.4,'/F2','center')
-    for key,y in zip(('starting_balance','ending_balance','total_investment','principal_received','nett_returns'),(272.57,284.81,297.05,309.29,321.55)):
-        first_ops+=text(format(Decimal(statement['summary'][key]),',.2f'),303.31,y,7.56,align='right')
-    all_rows=statement['rows']; groups=[all_rows[:29]]+[all_rows[i:i+55] for i in range(29,len(all_rows),55)]
-    columns=(50.964,154.31,306.49,352.93,419.8,486.64,553.5)
+    first_ops=text(title,302.5,190.8,11.4,'/T2','center')
+    for key,y in zip(('starting_balance','ending_balance','total_investment','principal_received','total_gross_returns'),(261.96,273.60,285.24,296.88,308.52)):
+        first_ops+=text(format(Decimal(statement['summary'][key]),',.2f'),312.95,y,7.56,font='/F1',align='right')
+    for key,y in zip(('service_fee','sst','nett_returns'),(261.96,273.60,285.24)):
+        first_ops+=text(format(Decimal(statement['summary'][key]),',.2f'),550.33,y,7.56,font='/F1',align='right')
+    all_rows=statement['rows']; groups=[all_rows[:33]]+[all_rows[i:i+58] for i in range(33,len(all_rows),58)]
+    columns=(50.964,170.65,315.85,360.73,418.45,487.21,553.5)
+
+    def display_amount(value):
+        if value == '': return ''
+        amount=Decimal(value)
+        return f'({abs(amount):,.2f})' if amount < 0 else f'{amount:,.2f}'
     for page_index,rows in enumerate(groups):
         page=first if page_index==0 else writer.add_blank_page(width=612,height=792)
         if page_index: page[NameObject('/Resources')]=first['/Resources']
         ops=first_ops if page_index==0 else ''
-        top=380.17 if page_index==0 else 54.56
-        bottom=top+len(rows)*12.24
+        top=353.64 if page_index==0 else 54.24
+        bottom=top+len(rows)*11.64
         ops+='0 G 0.6 w\n'
         for x in columns:
             ops+=f'{x} {792-top:.4f} m {x} {792-bottom:.4f} l S\n'
         for i in range(len(rows)+1):
-            y=792-top-i*12.24
+            y=792-top-i*11.64
             ops+=f'{columns[0]} {y:.4f} m {columns[-1]} {y:.4f} l S\n'
         for i,row in enumerate(rows):
-            y=(388.51 if page_index==0 else 62.90)+12.24*i
+            y=(360.60 if page_index==0 else 62.52)+11.64*i
             for value,left,right in zip((row['date'],row['description'],row['note']),columns[:3],columns[1:4]):
                 size=min(6.96,6.96*(right-left-3)/max(1,width(value,'/F1',6.96)))
-                ops+=text(value,(left+right)/2,y,size,align='center')
-            for key,right in zip(('previous','amount','current'),(417.55,484.39,551.25)):
-                ops+=text(format(Decimal(row[key]),',.2f'),right,y,align='right')
+                ops+=text(value,(left+right)/2,y,size,font='/F1',align='center')
+            for key,right in zip(('previous','amount','current'),(409.35,486.85,550.40)):
+                value=display_amount(row[key]); font='/F3' if value.startswith('(') else '/F1'
+                ops+=text(value,right,y,font=font,align='right')
         old=page.get_contents()
         stream=DecodedStreamObject()
         stream.set_data((b'q\n'+old.get_data()+b'\nQ\n' if old is not None else b'')+ops.encode('ascii'))

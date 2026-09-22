@@ -35,9 +35,13 @@ ROWS=[
 class StatementTests(unittest.TestCase):
     def test_inclusive_cutoff_and_approved_deposit(self):
         result=statement_data(workbook(ROWS),'2026-09-02')
-        self.assertEqual(result['row_count'],4)
+        self.assertEqual(result['row_count'],7)
         self.assertEqual(result['rows'][0]['date'],'21-Oct-2025 16:22:47')
-        self.assertEqual(result['summary'],dict(starting_balance='0.00',ending_balance='901.23',total_investment='200.00',principal_received='100.00',nett_returns='1.23'))
+        self.assertEqual(result['summary'],dict(starting_balance='0.00',ending_balance='901.23',
+            total_investment='200.00',principal_received='100.00',nett_returns='1.23',
+            total_gross_returns='1.57',service_fee='0.31',sst='0.02'))
+        self.assertEqual([row['description'] for row in result['rows'][-4:]],
+                         ['Gross Profit','Service Charge','SST','Net Profit'])
         self.assertEqual(result['warnings'],[])
         self.assertEqual(statement_data(workbook(ROWS))['as_of'],'2026-09-03')
 
@@ -58,19 +62,21 @@ class StatementTests(unittest.TestCase):
         self.assertEqual(result['warnings'],[])
         self.assertEqual(result['rows'][-1]['date'],'04-Sep-2026 14:24:31')
         self.assertEqual(result['summary']['ending_balance'],'802.57')
-        self.assertEqual(result['row_count'],7)
+        self.assertEqual(result['row_count'],13)
 
     def test_pdf_keeps_header_fonts_and_paginates(self):
         result=statement_data(workbook(ROWS),'2026-09-02')
         result['rows']=result['rows']*85
         pdf=PdfReader(statement_pdf(result))
-        self.assertEqual(len(pdf.pages),7)
+        self.assertEqual(len(pdf.pages),11)
         first=pdf.pages[0].extract_text()
         self.assertIn('Crowd Sense Sdn Bhd',first)
         self.assertIn('Amanahraya Trustees Berhad',first)
         self.assertIn('ACCOUNT STATEMENT (YEAR TO DAY- 2 September 26)',first)
+        self.assertIn('Total Gross Returns Received',first)
+        self.assertIn('Service Fee',first)
         self.assertIn('901.23',first)
-        self.assertIn('Calibri',str(pdf.pages[0]['/Resources']['/Font']['/F1']['/BaseFont']))
+        self.assertIn('Calibri',str(pdf.pages[0]['/Resources']['/Font']['/T1']['/BaseFont']))
         self.assertEqual(tuple(pdf.pages[0].mediabox),(0,0,612,792))
 
     def test_upload_preview_download_and_version_guard(self):
@@ -80,7 +86,7 @@ class StatementTests(unittest.TestCase):
                 client=app.test_client()
                 response=client.post('/api/account-statement',data={'file':(io.BytesIO(workbook(ROWS)),'ledger.xlsx'),'as_of':'2026-09-02'})
                 self.assertEqual(response.status_code,200,response.data)
-                self.assertEqual(response.json['row_count'],4)
+                self.assertEqual(response.json['row_count'],7)
                 version=response.json['version']
                 response=client.get('/api/export/account-statement.pdf',query_string={'as_of':'2026-09-02','version':version})
                 self.assertEqual(response.status_code,200,response.data[:100])
