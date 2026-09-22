@@ -161,6 +161,7 @@ dependencies = [
     { name = "defusedxml" },
     { name = "flask" },
     { name = "openpyxl" },
+    { name = "pypdf" },
 ]
 
 [package.dev-dependencies]
@@ -174,6 +175,7 @@ requires-dist = [
     { name = "defusedxml", specifier = ">=0.7.1,<1" },
     { name = "flask", specifier = ">=3.1,<4" },
     { name = "openpyxl", specifier = ">=3.1.5,<4" },
+    { name = "pypdf", specifier = ">=6,<7" },
 ]
 
 [package.metadata.requires-dev]
@@ -326,6 +328,15 @@ resolution-markers = [
 sdist = { url = "https://files.pythonhosted.org/packages/f9/98/df30f080ce2ec52bbb02c3db039edd60fe85d977f6afbf90e09abeb34804/pyodide_py-314.0.7.tar.gz", hash = "sha256:a33774c96f9c51c138e3ef2295ae7b524064d9501e896ceb1a0aa6d4da55f9e5", size = 62895, upload-time = "2026-09-14T05:07:35.015Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/ec/f2848eda90e7b8571376a846bed27bff3f0d5b10bfd87792f1ac6e7d794d/pyodide_py-314.0.7-py3-none-any.whl", hash = "sha256:75377c696639863ea966330f2eff4a3b6bd1c58a95fbd339859e6949c4be35e3", size = 70473, upload-time = "2026-09-14T05:07:33.664Z" },
+]
+
+[[package]]
+name = "pypdf"
+version = "6.19.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1f/ac/63d71aaedb59acbcdef491e6ca6469165e3771c9c74358204818fd9bc5a6/pypdf-6.19.0.tar.gz", hash = "sha256:bbc43aca292369ccc6cbc8a921991ecf2538a3587ab5a116eff06c321d647155", size = 7033266, upload-time = "2026-09-16T09:32:05.946Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3c/2c/c43c03eaf630435f023f1dc61ec4a4a78951ad5530a62c71cc89bde307b7/pypdf-6.19.0-py3-none-any.whl", hash = "sha256:7e5d6e730e7dae87d560a2cee218b852f6498c8be61966f3cd02ead971e48d14", size = 395480, upload-time = "2026-09-16T09:32:04.087Z" },
 ]
 
 [[package]]

@@ -3,7 +3,12 @@ name = "misb-manager"
 version = "1.0.0"
 description = "MISB fund management on Cloudflare Workers"
 requires-python = ">=3.13"
-dependencies = ["flask>=3.1,<4", "openpyxl>=3.1.5,<4", "defusedxml>=0.7.1,<1"]
+dependencies = [
+    "flask>=3.1,<4",
+    "openpyxl>=3.1.5,<4",
+    "defusedxml>=0.7.1,<1",
+    "pypdf>=6,<7",
+]
 
 [dependency-groups]
 dev = ["workers-py", "workers-runtime-sdk"]

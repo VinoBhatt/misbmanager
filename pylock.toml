@@ -51,6 +51,11 @@ version = "3.1.5"
 wheels = [{ url = "https://files.pythonhosted.org/packages/c0/da/977ded879c29cbd04de313843e76868e6e13408a94ed6b987245dc7c8506/openpyxl-3.1.5-py2.py3-none-any.whl", upload-time = 2024-06-28T14:03:41Z, size = 250910, hashes = { sha256 = "5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2" } }]
 
 [[packages]]
+name = "pypdf"
+version = "6.19.0"
+wheels = [{ url = "https://files.pythonhosted.org/packages/3c/2c/c43c03eaf630435f023f1dc61ec4a4a78951ad5530a62c71cc89bde307b7/pypdf-6.19.0-py3-none-any.whl", upload-time = 2026-09-16T09:32:04Z, size = 395480, hashes = { sha256 = "7e5d6e730e7dae87d560a2cee218b852f6498c8be61966f3cd02ead971e48d14" } }]
+
+[[packages]]
 name = "werkzeug"
 version = "3.1.8"
 wheels = [{ url = "https://files.pythonhosted.org/packages/93/8c/2e650f2afeb7ee576912636c23ddb621c91ac6a98e66dc8d29c3c69446e1/werkzeug-3.1.8-py3-none-any.whl", upload-time = 2026-04-02T18:49:12Z, size = 226459, hashes = { sha256 = "63a77fb8892bf28ebc3178683445222aa500e48ebad5ec77b0ad80f8726b1f50" } }]

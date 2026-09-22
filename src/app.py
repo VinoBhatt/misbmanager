@@ -833,3 +833,5 @@ def export_biweekly():
 
 from web import configure_web
 configure_web(app)
+from statements import register_statement_routes
+register_statement_routes(app)

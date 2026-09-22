@@ -134,6 +134,16 @@ Use this once on a new database before editing cloud records. It imports monitor
 
 ## Workbook handling
 
+### Account Statement PDF
+
+Open **Account Statement PDF**, upload the Cofundr transaction-log `.xlsx`, choose an inclusive cut-off date (or leave it blank for the latest transaction date), and click **Prepare statement**. Review the summary and select **Download account statement PDF**. Uploads replace the workspace transaction ledger and retain the previous workbook version in D1.
+
+The PDF follows the supplied `Account Statement YTD 2Sep26.pdf`: US Letter pages, embedded Calibri fonts, Cofundr letterhead, investor 5490 / Amanahraya Trustees Berhad, five summary values, and the original six-column table. The first page holds 29 transactions and continuation pages hold 55, without repeating the header, matching the reference. Despite the reference title saying "YEAR TO DAY", it includes activity since October 2025; the generator likewise includes all completed entries in the supplied log through the chosen cut-off, not just the current calendar year.
+
+Amounts use decimal arithmetic. Deposits and withdrawals use only successful Deposit Approved and Withdrawal Approved entries, preserving their Excel timestamps and balances. Duplicate Deposit and Withdrawal request entries are excluded. The separate RM1 balance deduction accompanying an approved withdrawal is retained as Withdrawal Fee. Balance discontinuities are flagged in the preview; excluded entries are never used to adjust approved balances. No transaction amounts or dates are sourced from the embedded, sanitized artwork template.
+
+The supplied September 22 log, cut off at September 2, reproduces all 322 reference rows and summary totals, except the explicitly selected Excel withdrawal timestamp. PDF tests cover date filters, deposits, withdrawal fees, decimal totals, pagination, authenticating API requests, and rejecting a download if the source changed after preview.
+
 Uploads accept `.xlsx` files up to 10 MB, with bounded archive expansion. Required columns and calculations are validated before publishing the new version. Rejected uploads leave the current version intact. Workbooks are stored as ordered, base64-encoded chunks in D1, with a size and SHA-256 integrity check. The complete workbook and current-version pointer are saved in one atomic transaction. Chunking preserves the 10 MB upload allowance while staying within D1 row limits. Each successful upload retains its predecessor in the database; no retention deletion runs automatically. Base64 encoding adds approximately one-third storage overhead. D1's `sources` table identifies the current versions.
 
 Excel exports preserve the simulation template's sheets, formulas, styling and Remarks. Excel recalculates formulas when opening the updated simulation. The bi-weekly report is a current monitoring snapshot: its report date labels the report and does not filter historical activity. Simulation Copy supports its original ledger cut-off workflow.
