@@ -153,11 +153,27 @@ Excel exports preserve the simulation template's sheets, formulas, styling and R
 
 Simulation imports support both MISB layouts. The original layout uses `Gross Profit` and `Late Profit`; the September 2026 layout uses `Gross Profit Earned`, `Total Gross Profit`, `Late Payment Charges`, `SST`, and `Installment`. Header-based mapping keeps dashboard totals independent of column position. Simulation Copy preserves the matching layout and refreshes its repayment formulas using the column names present in the uploaded template.
 
+The **Reconciliation** view compares each note's committed investment, principal payouts, profit payouts, and outstanding principal between the successful transaction ledger and the current simulation. Differences above one sen and notes missing from either source are marked for review.
+
+The **Transaction Matching** view turns unresolved ledger references into actionable items. A transaction can be assigned to a current simulation note through a reversible D1 override without changing the uploaded Excel workbook. All downstream calculations use the assignment.
+
+The **Data Sources** page validates an Excel workbook before import and requires a second confirmation. It reports row counts, format, duplicate transaction IDs or loan codes, invalid dates and amounts, and missing note or issuer fields without changing the live D1 source.
+
+Every imported source workbook remains an immutable D1 version. **Workbook history and rollback** lists the stored transaction, simulation, and projection versions and can restore an earlier version while retaining the newer copies.
+
 ### New Note Allocation
 
 Open **New Note Allocation** and upload a PNG, JPEG or WebP screenshot of the Cofundr note card. **Read screenshot** prefills the note name, reference number, note type, risk rating, financing amount, outstanding amount, profit rate, tenure, campaign dates and status. Review those values and complete the issuer name, company ID, business description, MISB allocation, payment type and disbursal date.
 
-Saving normalizes a Cofundr reference such as `IIF2113-17092026` to the simulation loan code `IIF-2113`, calculates exposure, repayment date, expected repayment, gross and net profit, and service fee, and stores the record in D1. Saved notes are automatically appended to the next **Simulation Copy** preview and Excel export; a matching ledger allocation is then treated as resolved. The screenshot itself is not stored, and R2 is not used.
+Saving normalizes a Cofundr reference such as `IIF2113-17092026` to the simulation loan code `IIF-2113`, calculates exposure, repayment date, expected repayment, gross and net profit, and service fee, and stores the record in D1. Approved notes are appended to the next **Simulation Copy** preview and Excel export; a matching ledger allocation is then treated as resolved. The screenshot itself is not stored, and R2 is not used.
+
+New allocations follow `Draft → Ready for Approval → Approved → Disbursed`. Only Approved and Disbursed records can enter Simulation Copy or the allocation email. A record can be cancelled or returned for correction through the permitted workflow transitions.
+
+The **Repayment Alerts** view combines unpaid principal and profit schedule items into overdue, seven-day, and thirty-day queues with note, issuer, due date, and expected amount.
+
+The **Audit Log** records workbook imports and restorations, allocation approvals, transaction assignments, issuer-limit changes, monitoring updates, and planned cash-flow changes.
+
+The **Allocation Email** fund position calculates available cash from the latest ledger balance on the request date and expected receipts from the simulation repayment schedule. When override fields are blank, the latest successful `Deposit Approved` and `Withdrawal Approved` entries are filled automatically from the transaction ledger.
 
 ### Allocation Email
 

@@ -33,6 +33,17 @@ ROWS=[
 
 
 class StatementTests(unittest.TestCase):
+    def test_sst_starts_on_first_august_2026(self):
+        rows=[
+            [1,'Profit Payout',100,0,100,1996,'SUCCESSFUL','31-Jul-2026 23:59:59'],
+            [2,'Profit Payout',100,100,200,1996,'SUCCESSFUL','01-Aug-2026 00:00:00']]
+        result=statement_data(workbook(rows))
+        self.assertEqual(result['summary']['sst'],'2.04')
+        july=[r for r in result['rows'] if r['date'].startswith('31-Jul')]
+        august=[r for r in result['rows'] if r['date'].startswith('01-Aug')]
+        self.assertNotIn('SST',[r['description'] for r in july])
+        self.assertIn('SST',[r['description'] for r in august])
+
     def test_inclusive_cutoff_and_approved_deposit(self):
         result=statement_data(workbook(ROWS),'2026-09-02')
         self.assertEqual(result['row_count'],7)

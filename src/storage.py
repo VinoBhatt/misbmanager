@@ -152,8 +152,14 @@ def save_source(kind, data, as_of):
     # Publish the complete workbook and its pointer in one transaction.
     from uuid import uuid4
     key = f"sources/{kind}/{uuid4().hex}.xlsx"
-    previous = source_rows().get(kind, {}).get("object_key")
+    previous_row = source_rows().get(kind, {})
+    previous = previous_row.get("object_key")
     statements = workbook_statements(key, data)
+    if previous:
+        statements.append(("INSERT OR IGNORE INTO source_version_meta(object_key,kind,as_of) VALUES(?,?,?)",
+                           (previous, kind, previous_row.get('as_of',''))))
+    statements.append(("INSERT INTO source_version_meta(object_key,kind,as_of) VALUES(?,?,?)",
+                       (key, kind, as_of)))
     statements.append(("""INSERT INTO sources(kind,object_key,as_of) VALUES(?,?,?)
           ON CONFLICT(kind) DO UPDATE SET object_key=excluded.object_key,
           as_of=excluded.as_of,updated_at=CURRENT_TIMESTAMP""", (kind, key, as_of)))
@@ -161,3 +167,59 @@ def save_source(kind, data, as_of):
     g.pop("sources", None)
     g.pop("source_bytes", None)
     return previous
+
+
+def source_versions(kind):
+    """List stored versions for one source, newest first."""
+    current=source_rows().get(kind,{}).get('object_key')
+    con=connect()
+    try:
+        rows=list(con.execute('''SELECT v.object_key,v.byte_size,v.sha256,v.created_at,
+          COALESCE(m.as_of,'') AS as_of FROM workbook_versions v
+          LEFT JOIN source_version_meta m ON m.object_key=v.object_key
+          WHERE m.kind=? OR v.object_key=? OR v.object_key LIKE ?
+          ORDER BY v.created_at DESC''',(kind,current or '',f'sources/{kind}/%')))
+    finally:
+        con.close()
+    return [{**dict(row),'current':row['object_key']==current} for row in rows]
+
+
+def select_source_version(kind, object_key, as_of=''):
+    """Point a source at an existing immutable workbook version."""
+    versions={row['object_key']:row for row in source_versions(kind)}
+    if object_key not in versions:
+        raise ValueError('That workbook version does not belong to this source.')
+    chosen_as_of=as_of or versions[object_key].get('as_of') or source_rows().get(kind,{}).get('as_of','')
+    con=connect()
+    try:
+        con.execute('UPDATE sources SET object_key=?,as_of=?,updated_at=CURRENT_TIMESTAMP WHERE kind=?',
+                    (object_key,chosen_as_of,kind))
+        con.commit()
+    finally:
+        con.close()
+    g.pop('sources',None);g.pop('source_bytes',None)
+    return chosen_as_of
+
+
+def audit_event(action, entity_type, entity_id='', details=None):
+    """Append a compact immutable management event to D1."""
+    con=connect()
+    try:
+        con.execute('INSERT INTO audit_events(action,entity_type,entity_id,details) VALUES(?,?,?,?)',
+                    (action,entity_type,str(entity_id or ''),json.dumps(details or {},separators=(',',':'))))
+        con.commit()
+    finally:
+        con.close()
+
+
+def audit_rows(limit=200):
+    con=connect()
+    try:
+        rows=[dict(row) for row in con.execute('SELECT * FROM audit_events ORDER BY id DESC LIMIT ?',
+                                               (max(1,min(int(limit),500)),))]
+    finally:
+        con.close()
+    for row in rows:
+        try: row['details']=json.loads(row.get('details') or '{}')
+        except (TypeError,json.JSONDecodeError): row['details']={}
+    return rows

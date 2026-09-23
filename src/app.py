@@ -4,7 +4,8 @@ from copy import copy
 from datetime import datetime, date, timedelta
 import openpyxl, json, re, io, csv, calendar
 from storage import (connect, read_source, source_exists, source_rows, save_source,
-                     read_parsed_source, save_parsed_source)
+                     read_parsed_source, save_parsed_source, source_versions,
+                     select_source_version, audit_event, audit_rows)
 
 app = Flask(__name__, static_folder=None)
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
@@ -54,29 +55,35 @@ def get_settings():
     return {'issuer_limit':num(d.get('issuer_limit',2000000))}
 
 def load_transactions():
-    cached=getattr(g,'transactions_parsed',None)
+    cached=getattr(g,'transactions_effective',None)
     if cached is not None: return cached
-    cached=read_parsed_source('transactions') if source_exists('transactions') else None
-    if cached is not None:
-        g.transactions_parsed=cached
-        return cached
-    if not source_exists('transactions'): return []
-    wb=openpyxl.load_workbook(read_source('transactions'),data_only=True,read_only=True)
-    ws=wb[wb.sheetnames[0]]
-    headers=[c.value for c in next(ws.iter_rows(min_row=2,max_row=2))]
-    out=[]
-    for vals in ws.iter_rows(min_row=3,values_only=True):
-        if not any(v is not None for v in vals): continue
-        r=dict(zip(headers,vals))
-        out.append({
-            'id': r.get('ID'), 'action': r.get('Action') or '', 'amount': num(r.get('Sum Involved(MYR)')),
-            'previous_balance': num(r.get('Previous Balance(MYR)')), 'current_balance': num(r.get('Current Balance(MYR)')),
-            'note': normalize_note_code(r.get('Note #')), 'transaction_no': r.get('Transaction No') or '',
-            'status': r.get('Status') or '', 'date_raw': str(r.get('Date') or ''), 'date': iso(r.get('Date')), 'pay_via': r.get('Pay Via') or ''
-        })
-    wb.close()
-    g.transactions_parsed=out
-    return out
+    base=read_parsed_source('transactions') if source_exists('transactions') else None
+    if base is None:
+        if not source_exists('transactions'): return []
+        wb=openpyxl.load_workbook(read_source('transactions'),data_only=True,read_only=True)
+        ws=wb[wb.sheetnames[0]]
+        headers=[c.value for c in next(ws.iter_rows(min_row=2,max_row=2))]
+        base=[]
+        for vals in ws.iter_rows(min_row=3,values_only=True):
+            if not any(v is not None for v in vals): continue
+            r=dict(zip(headers,vals))
+            base.append({
+                'id': r.get('ID'), 'action': r.get('Action') or '', 'amount': num(r.get('Sum Involved(MYR)')),
+                'previous_balance': num(r.get('Previous Balance(MYR)')), 'current_balance': num(r.get('Current Balance(MYR)')),
+                'note': normalize_note_code(r.get('Note #')), 'transaction_no': r.get('Transaction No') or '',
+                'status': r.get('Status') or '', 'date_raw': str(r.get('Date') or ''), 'date': iso(r.get('Date')), 'pay_via': r.get('Pay Via') or ''
+            })
+        wb.close()
+    g.transactions_base=base
+    con=connect()
+    try: overrides={str(row['transaction_id']):row['loan_code'] for row in con.execute('SELECT transaction_id,loan_code FROM transaction_note_overrides')}
+    finally: con.close()
+    effective=[]
+    for row in base:
+        replacement=overrides.get(str(row.get('id')))
+        effective.append({**row,'original_note':row.get('note',''),'note':replacement} if replacement else row)
+    g.transactions_effective=effective
+    return effective
 
 def load_simulation():
     cached=getattr(g,'simulation_parsed',None)
@@ -223,7 +230,8 @@ def load_projection_history():
 def normalized_source(kind):
     """Parse one workbook into the compact representation used by calculations."""
     if kind=='transactions':
-        return load_transactions()
+        rows=load_transactions()
+        return getattr(g,'transactions_base',rows)
     if kind=='simulation':
         portfolio,schedule=load_simulation()
         return {'portfolio':portfolio,'schedule':schedule,'display':g.simulation_display}
@@ -534,6 +542,66 @@ def build_cash_projection(current_cash, last_tx_date, payment_schedule):
         bal+=x['amount']; y=dict(x); y['projected_balance']=bal; timeline.append(y)
     return timeline
 
+
+def build_reconciliation(transactions, portfolio, tolerance=0.01):
+    """Compare note-level ledger movements with the imported simulation snapshot."""
+    ledger={}
+    for row in transactions:
+        if str(row.get('status','')).upper()!='SUCCESSFUL': continue
+        code=row.get('note') or ''
+        if not code.startswith('IIF-'): continue
+        item=ledger.setdefault(code,{'committed':0.0,'principal_paid':0.0,'profit_paid':0.0})
+        action=row.get('action'); amount=max(0,num(row.get('amount')))
+        if action=='Investment Committed': item['committed']+=amount
+        elif action=='Principal Payout': item['principal_paid']+=amount
+        elif action=='Profit Payout': item['profit_paid']+=amount
+    simulation={row['loan_code']:row for row in portfolio if row.get('loan_code')}
+    rows=[]
+    for code in sorted(set(ledger)|set(simulation)):
+        led=ledger.get(code,{'committed':0.0,'principal_paid':0.0,'profit_paid':0.0})
+        sim=simulation.get(code)
+        ledger_outstanding=max(0,led['committed']-led['principal_paid'])
+        issues=[]
+        if not sim: issues.append('Missing from simulation')
+        elif code not in ledger: issues.append('No ledger allocation')
+        investment_diff=led['committed']-num(sim.get('investment_amount')) if sim else led['committed']
+        principal_diff=led['principal_paid']-num(sim.get('paid_principal')) if sim else led['principal_paid']
+        profit_diff=led['profit_paid']-num(sim.get('paid_profit')) if sim else led['profit_paid']
+        outstanding_diff=ledger_outstanding-num(sim.get('unpaid_principal')) if sim else ledger_outstanding
+        for label,value in (('Investment',investment_diff),('Principal paid',principal_diff),
+                            ('Profit paid',profit_diff),('Outstanding principal',outstanding_diff)):
+            if abs(value)>tolerance: issues.append(f'{label} differs')
+        rows.append({'loan_code':code,'issuer':sim.get('issuer','') if sim else '',
+                     'ledger_committed':led['committed'],'simulation_investment':num(sim.get('investment_amount')) if sim else 0,
+                     'ledger_principal_paid':led['principal_paid'],'simulation_principal_paid':num(sim.get('paid_principal')) if sim else 0,
+                     'ledger_profit_paid':led['profit_paid'],'simulation_profit_paid':num(sim.get('paid_profit')) if sim else 0,
+                     'ledger_outstanding':ledger_outstanding,'simulation_outstanding':num(sim.get('unpaid_principal')) if sim else 0,
+                     'investment_difference':investment_diff,'principal_difference':principal_diff,
+                     'profit_difference':profit_diff,'outstanding_difference':outstanding_diff,
+                     'issues':issues,'status':'Matched' if not issues else 'Review'})
+    mismatches=[row for row in rows if row['status']=='Review']
+    return {'rows':rows,'matched':len(rows)-len(mismatches),'review':len(mismatches),
+            'missing_from_simulation':sum('Missing from simulation' in row['issues'] for row in rows),
+            'outstanding_difference':sum(row['outstanding_difference'] for row in rows)}
+
+
+def build_transaction_matching(transactions, portfolio):
+    known={row['loan_code'] for row in portfolio if row.get('loan_code')}
+    relevant={'Investment Committed','Principal Payout','Profit Payout'}
+    rows=[]
+    for row in transactions:
+        if str(row.get('status','')).upper()!='SUCCESSFUL' or row.get('action') not in relevant: continue
+        note=row.get('note') or ''
+        if note not in known or row.get('original_note') is not None:
+            rows.append({'id':row.get('id'),'date':row.get('date'),'action':row.get('action'),
+                         'amount':row.get('amount'),'note':note,
+                         'original_note':row.get('original_note',note),
+                         'overridden':row.get('original_note') is not None,
+                         'reason':'Manual assignment' if row.get('original_note') is not None else ('Missing note number' if not note.startswith('IIF-') else 'Note not in simulation')})
+    return {'rows':rows,'unresolved':sum(not row['overridden'] for row in rows),
+            'overridden':sum(row['overridden'] for row in rows),
+            'candidates':[{'loan_code':row['loan_code'],'issuer':row.get('issuer',''),'note_name':row.get('note_name','')} for row in portfolio]}
+
 def build_payload():
     tx=load_transactions(); pf,schedule=load_simulation(); projection_history=load_projection_history();
     if not isinstance(projection_history, dict):
@@ -593,6 +661,8 @@ def build_payload():
     try: sim_as_of=source_rows().get('simulation',{}).get('as_of','Unknown')
     except: sim_as_of='Unknown'
     projection=build_cash_projection(latest_cash,last_tx_date,pay_schedule)
+    reconciliation=build_reconciliation(tx,pf)
+    transaction_matching=build_transaction_matching(tx,pf)
     return {'settings':settings,'summary':{'cash':latest_cash,'ledger_deployed':deployed,'total_investment_committed':invested,'outstanding_principal':outstanding_principal,'ledger_profit_paid':profit_paid,'quarter_profit_collected':q_profit,'return_this_quarter':return_this_quarter,'total_return':total_return,'implied_fund_value':total_value,
                        'simulation_outstanding':sim_outstanding,'simulation_unpaid_profit':unpaid_profit,'active_notes':len(active),
                        'transaction_count':len(tx),'portfolio_count':len(pf),'last_transaction_date':last_tx_date,'simulation_as_of':sim_as_of,
@@ -600,7 +670,9 @@ def build_payload():
                        'weighted_monthly_net_rate':weighted_monthly,'annualized_net_rate':weighted_monthly*12,'service_fee':service_fee,
                        'investable_cash':latest_cash},
             'transactions':tx,'portfolio':pf,'schedule':schedule,'profit_schedule':profit_schedule,'due':due,'receivables':receivables,'issuers':issuers,
-            'balance_breakdown':balance_breakdown,'action_totals':action_totals,'today':today,'cash_projection':projection,'cashflow_plan':cashflow_plan_rows(),'projection_history':{'cutoff':projection_history.get('cutoff'),'event_count':len(projection_history.get('events',[]))}}
+            'balance_breakdown':balance_breakdown,'action_totals':action_totals,'today':today,'cash_projection':projection,'cashflow_plan':cashflow_plan_rows(),
+            'reconciliation':reconciliation,'transaction_matching':transaction_matching,
+            'projection_history':{'cutoff':projection_history.get('cutoff'),'event_count':len(projection_history.get('events',[]))}}
 
 
 
@@ -612,7 +684,34 @@ def save_settings():
     d=request.get_json(force=True) or {}; limit=num(d.get('issuer_limit'))
     if limit <= 0: return jsonify({'error':'Issuer limit must be greater than zero'}),400
     con=connect(); con.execute("INSERT INTO settings(key,value) VALUES('issuer_limit',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(limit),)); con.commit(); con.close()
+    audit_event('Updated issuer limit','settings','issuer_limit',{'value':limit})
     return jsonify({'ok':True})
+
+
+@app.route('/api/transaction-note-override/<transaction_id>',methods=['POST','DELETE'])
+def transaction_note_override(transaction_id):
+    con=connect()
+    try:
+        if request.method=='DELETE':
+            con.execute('DELETE FROM transaction_note_overrides WHERE transaction_id=?',(transaction_id,));con.commit()
+            audit_event('Removed assignment','transaction',transaction_id)
+            return jsonify({'ok':True})
+        code=normalize_note_code((request.get_json() or {}).get('loan_code'))
+        portfolio,_=load_simulation()
+        if code not in {row['loan_code'] for row in portfolio}:
+            return jsonify({'error':'Choose a note from the current simulation.'}),400
+        con.execute('''INSERT INTO transaction_note_overrides(transaction_id,loan_code) VALUES(?,?)
+          ON CONFLICT(transaction_id) DO UPDATE SET loan_code=excluded.loan_code,updated_at=CURRENT_TIMESTAMP''',(transaction_id,code))
+        con.commit()
+    finally:
+        con.close()
+    audit_event('Assigned note','transaction',transaction_id,{'loan_code':code})
+    return jsonify({'ok':True,'transaction_id':transaction_id,'loan_code':code})
+
+
+@app.get('/api/audit-events')
+def audit_events():
+    return jsonify(audit_rows(request.args.get('limit',200)))
 
 @app.route('/api/monitoring/<loan_code>', methods=['POST'])
 def save_monitoring(loan_code):
@@ -622,7 +721,7 @@ def save_monitoring(loan_code):
     con.execute('''INSERT INTO monitoring(loan_code,status,owner,next_action,review_date,notes,updated_at)
       VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(loan_code) DO UPDATE SET status=excluded.status, owner=excluded.owner,
       next_action=excluded.next_action, review_date=excluded.review_date, notes=excluded.notes, updated_at=CURRENT_TIMESTAMP''',vals)
-    con.commit(); con.close(); return jsonify({'ok':True})
+    con.commit(); con.close(); audit_event('Updated monitoring','note',loan_code,{'status':d.get('status','Normal')}); return jsonify({'ok':True})
 
 @app.route('/api/payment-mark', methods=['POST'])
 def save_payment_mark():
@@ -640,11 +739,11 @@ def add_cashflow_plan():
     d=request.get_json(force=True) or {}; typ=d.get('flow_type')
     if typ not in ('Allocation','Receivable'): return jsonify({'error':'Flow type must be Allocation or Receivable'}),400
     if not d.get('flow_date') or num(d.get('amount'))<=0: return jsonify({'error':'Date and positive amount are required'}),400
-    con=connect(); cur=con.execute('INSERT INTO cashflow_plan(flow_date,flow_type,loan_code,issuer,amount,notes) VALUES(?,?,?,?,?,?)',(d['flow_date'],typ,d.get('loan_code',''),d.get('issuer',''),num(d['amount']),d.get('notes',''))); con.commit(); i=cur.lastrowid; con.close(); return jsonify({'ok':True,'id':i})
+    con=connect(); cur=con.execute('INSERT INTO cashflow_plan(flow_date,flow_type,loan_code,issuer,amount,notes) VALUES(?,?,?,?,?,?)',(d['flow_date'],typ,d.get('loan_code',''),d.get('issuer',''),num(d['amount']),d.get('notes',''))); con.commit(); i=cur.lastrowid; con.close(); audit_event('Added planned cash flow','cashflow',i,{'type':typ,'date':d['flow_date'],'amount':num(d['amount'])}); return jsonify({'ok':True,'id':i})
 
 @app.route('/api/cashflow-plan/<int:item_id>', methods=['DELETE'])
 def delete_cashflow_plan(item_id):
-    con=connect(); con.execute('DELETE FROM cashflow_plan WHERE id=?',(item_id,)); con.commit(); con.close(); return jsonify({'ok':True})
+    con=connect(); con.execute('DELETE FROM cashflow_plan WHERE id=?',(item_id,)); con.commit(); con.close(); audit_event('Deleted planned cash flow','cashflow',item_id); return jsonify({'ok':True})
 
 @app.route('/api/upload/<kind>', methods=['POST'])
 def upload(kind):
@@ -676,7 +775,49 @@ def upload(kind):
     backup=save_source(kind,data,as_of)
     current=source_rows()[kind]
     save_parsed_source(kind,current['object_key'],parsed)
+    audit_event('Imported workbook','source',kind,{'as_of':as_of,'object_key':current['object_key'],'backup':backup or ''})
     return jsonify({'ok':True,'backup':backup or 'First import; no previous version'})
+
+
+@app.post('/api/upload/validate/<kind>')
+def validate_upload(kind):
+    from uploads import inspect_workbook
+    if kind not in ('transactions','simulation','projections'):
+        return jsonify({'error':'Invalid file type'}),400
+    f=request.files.get('file')
+    if not f or not f.filename.lower().endswith('.xlsx'):
+        return jsonify({'error':'Please upload an .xlsx file'}),400
+    try:
+        return jsonify(inspect_workbook(kind,f.read()))
+    except Exception as error:
+        return jsonify({'error':str(error) or 'Workbook could not be validated.'}),400
+
+
+@app.get('/api/source-versions/<kind>')
+def list_source_versions(kind):
+    if kind not in ('transactions','simulation','projections'):
+        return jsonify({'error':'Invalid source kind'}),400
+    return jsonify(source_versions(kind))
+
+
+@app.post('/api/source-versions/<kind>/restore')
+def restore_source_version(kind):
+    if kind not in ('transactions','simulation','projections'):
+        return jsonify({'error':'Invalid source kind'}),400
+    body=request.get_json() or {};object_key=str(body.get('object_key') or '')
+    previous=source_rows().get(kind,{}).copy()
+    try:
+        as_of=select_source_version(kind,object_key,str(body.get('as_of') or ''))
+        for key in ('transactions_parsed','simulation_parsed','simulation_display','projection_history_parsed'):
+            g.pop(key,None)
+        parsed=normalized_source(kind)
+        save_parsed_source(kind,object_key,parsed)
+        audit_event('Restored workbook','source',kind,{'object_key':object_key,'as_of':as_of})
+        return jsonify({'ok':True,'kind':kind,'as_of':as_of})
+    except Exception as error:
+        if previous.get('object_key'):
+            select_source_version(kind,previous['object_key'],previous.get('as_of',''))
+        return jsonify({'error':str(error) or 'The source version could not be restored.'}),400
 
 
 @app.post('/api/admin/rebuild-source-cache/<kind>')
@@ -706,7 +847,8 @@ def simulation_update_snapshot(as_of=None):
         inv=max(0,num(r.get('investment_amount')))
         paid_principal=sum(num(t.get('amount')) for t in note_tx if t.get('action')=='Principal Payout')
         tawidh=sum(num(t.get('amount')) for t in note_tx if t.get('action')=='Profit Payout' and ('tawidh' in str(t.get('transaction_no') or '').lower() or "ta'widh" in str(t.get('transaction_no') or '').lower()))
-        all_profit=sum(num(t.get('amount')) for t in note_tx if t.get('action')=='Profit Payout')
+        profit_tx=[t for t in note_tx if t.get('action')=='Profit Payout']
+        all_profit=sum(num(t.get('amount')) for t in profit_tx)
         paid_profit=all_profit if r.get('report_format')=='expanded-profit' else all_profit-tawidh
         unpaid_principal=max(0,inv-paid_principal)
         settlement=None; running=0.0
@@ -727,7 +869,11 @@ def simulation_update_snapshot(as_of=None):
         original_net=max(0,num(r.get('net_profit')))
         original_gross=max(0,num(r.get('gross_profit')))
         expanded=r.get('report_format')=='expanded-profit'
-        sst=max(0,num(r.get('sst')))
+        # SST is transaction-driven: it applies only to profit payouts dated
+        # 1 August 2026 onward, with the same per-transaction rounding as statements.
+        from statements import profit_components
+        sst=sum(float(profit_components(t.get('amount'),parse_date(t.get('date')))[2])
+                for t in profit_tx if parse_date(t.get('date')))
         gross_earned=max(0,num(r.get('gross_profit_earned')))
         late_charge=max(0,num(r.get('late_profit')))
         if completed and expanded:
@@ -743,8 +889,9 @@ def simulation_update_snapshot(as_of=None):
             gross_profit=(expected_net/0.8 if expected_net else original_gross)
             service_fee=max(0,gross_profit-expected_net)
         else:
-            expected_net=original_net;unpaid_profit=max(0,expected_net-paid_profit)
             gross_profit=original_gross;service_fee=max(0,num(r.get('service_fee')))
+            expected_net=max(0,gross_profit-service_fee-sst) if expanded else original_net
+            unpaid_profit=max(0,expected_net-paid_profit)
         updates[code]={
             '_expanded':expanded,
             'Loan Status':'Completed' if completed else r.get('loan_status',''),
@@ -785,7 +932,7 @@ def simulation_update_snapshot(as_of=None):
         if t.get('action')=='Investment Committed' and t.get('note'):
             ledger_alloc[t['note']]=ledger_alloc.get(t['note'],0)+num(t.get('amount'))
     from allocations import allocation_map, row_values
-    saved_allocations=allocation_map()
+    saved_allocations=allocation_map(approved_only=True)
     for code,record in sorted(saved_allocations.items()):
         if code in template_codes: continue
         rows.append(row_values(headers,record,len(rows)+1));template_codes.add(code)
@@ -833,7 +980,7 @@ def build_updated_simulation_workbook(as_of=None):
             ws.cell(row,hidx['Net Profit']).value=f'={openpyxl.utils.get_column_letter(hidx["Total Gross Profit"])}{row}-{openpyxl.utils.get_column_letter(hidx["Service Fee "])}{row}-{openpyxl.utils.get_column_letter(hidx["SST"])}{row}'
     from allocations import allocation_map, row_values
     existing={normalize_note_code(ws.cell(row,2).value) for row in range(2,ws.max_row+1)}
-    for code,record in sorted(allocation_map().items()):
+    for code,record in sorted(allocation_map(approved_only=True).items()):
         if code in existing: continue
         target=ws.max_row+1; source=max(2,target-1)
         for column in range(1,len(headers)+1):

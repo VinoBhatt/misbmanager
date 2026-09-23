@@ -111,6 +111,12 @@ class WebsiteTests(unittest.TestCase):
         response=self.client.post('/api/note-allocations',json=payload)
         self.assertEqual(response.status_code,200,response.data)
         self.assertEqual(response.json['gross_pa'],.156)
+        draft=self.client.get('/api/simulation-preview').json
+        self.assertIn(missing['loan_code'],[item['loan_code'] for item in draft['missing_notes']])
+        response=self.client.patch('/api/note-allocations/'+missing['loan_code']+'/approval',json={'status':'Ready for Approval'})
+        self.assertEqual(response.status_code,200,response.data)
+        response=self.client.patch('/api/note-allocations/'+missing['loan_code']+'/approval',json={'status':'Approved'})
+        self.assertEqual(response.status_code,200,response.data)
         email=self.client.get('/api/allocation-email-preview',query_string={
             'loan_code':missing['loan_code'],'request_date':'2026-09-17','period_end':'2026-09-30',
             'additional_amount':'7000000','additional_date':'2026-09-01',
@@ -121,6 +127,16 @@ class WebsiteTests(unittest.TestCase):
         self.assertAlmostEqual(email.json['total_expected'],email.json['available']+email.json['expected']-email.json['reserve'])
         self.assertAlmostEqual(email.json['net_available'],email.json['total_expected']-missing['allocated'])
         self.assertIn('Dear Muamalat Invest Operations Team',email.json['plain_text'])
+        automatic=self.client.get('/api/allocation-email-preview',query_string={
+            'loan_code':missing['loan_code'],'request_date':'2026-09-17','period_end':'2026-09-30'
+        })
+        self.assertEqual(automatic.status_code,200,automatic.data)
+        eligible=[row for row in self.client.get('/api/data').json['transactions']
+                  if row['status']=='SUCCESSFUL' and row['action']=='Deposit Approved' and row['date']<='2026-09-17']
+        if eligible:
+            latest=max(row['date'] for row in eligible)
+            self.assertEqual(automatic.json['additional_date'],latest)
+            self.assertEqual(automatic.json['additional_amount'],sum(row['amount'] for row in eligible if row['date']==latest))
         refreshed=self.client.get('/api/simulation-preview').json
         self.assertNotIn(missing['loan_code'],[item['loan_code'] for item in refreshed['missing_notes']])
         index=refreshed['headers'].index('Loan Code')
@@ -145,6 +161,46 @@ class WebsiteTests(unittest.TestCase):
         with closing(sqlite3.connect(Path(self.directory.name)/'misb_tracker.db')) as con, con:
             self.assertIsNotNone(con.execute('SELECT 1 FROM workbook_versions WHERE object_key=?',(response.json['backup'],)).fetchone())
         self.assertEqual(self.client.get('/api/data').json['summary'],self.original_payload['summary'])
+        versions=self.client.get('/api/source-versions/transactions').json
+        self.assertTrue(any(row['current'] for row in versions))
+        old=next(row for row in versions if row['object_key']==response.json['backup'])
+        restored=self.client.post('/api/source-versions/transactions/restore',json={'object_key':old['object_key']})
+        self.assertEqual(restored.status_code,200,restored.data)
+        self.assertTrue(next(row for row in self.client.get('/api/source-versions/transactions').json
+                             if row['object_key']==old['object_key'])['current'])
+
+    def test_validation_report_does_not_replace_live_source(self):
+        before=self.client.get('/api/data').json
+        response=self.client.post('/api/upload/validate/transactions',
+            data={'file':(io.BytesIO((self.seed/'transactions.xlsx').read_bytes()),'transactions.xlsx')})
+        self.assertEqual(response.status_code,200,response.data)
+        self.assertTrue(response.json['can_import'])
+        self.assertGreater(response.json['stats']['successful'],0)
+        after=self.client.get('/api/data').json
+        self.assertEqual(after['summary'],before['summary'])
+
+    def test_reconciliation_exposes_note_level_differences(self):
+        reconciliation=self.client.get('/api/data').json['reconciliation']
+        self.assertEqual(reconciliation['matched']+reconciliation['review'],len(reconciliation['rows']))
+        self.assertTrue(all('ledger_outstanding' in row and 'simulation_outstanding' in row
+                            for row in reconciliation['rows']))
+
+    def test_transaction_note_override_is_audited_and_reversible(self):
+        before=self.client.get('/api/data').json
+        transaction=next(row for row in before['transactions']
+                         if row['status']=='SUCCESSFUL' and row['action'] in ('Investment Committed','Principal Payout','Profit Payout'))
+        candidates=[row['loan_code'] for row in before['portfolio'] if row['loan_code']!=transaction['note']]
+        self.assertTrue(candidates)
+        response=self.client.post('/api/transaction-note-override/'+str(transaction['id']),json={'loan_code':candidates[0]})
+        self.assertEqual(response.status_code,200,response.data)
+        changed=next(row for row in self.client.get('/api/data').json['transactions'] if row['id']==transaction['id'])
+        self.assertEqual(changed['note'],candidates[0])
+        self.assertEqual(changed['original_note'],transaction['note'])
+        events=self.client.get('/api/audit-events').json
+        self.assertTrue(any(row['action']=='Assigned note' and row['entity_id']==str(transaction['id']) for row in events))
+        self.assertEqual(self.client.delete('/api/transaction-note-override/'+str(transaction['id'])).status_code,200)
+        restored=next(row for row in self.client.get('/api/data').json['transactions'] if row['id']==transaction['id'])
+        self.assertEqual(restored['note'],transaction['note'])
 
     def test_expanded_profit_simulation_format_is_accepted(self):
         headers=['No.','Loan Code','Company ID','Issuer Name','Note Name','Product Type',

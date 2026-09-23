@@ -5,7 +5,7 @@ test('every fund management view renders without browser errors', async ({page})
   page.on('pageerror',error=>errors.push(error.message));
   await page.goto('/');
   await expect(page.locator('#content .kpis').first()).toBeVisible();
-  for(const view of ['exposure','receivables','profit','portfolio','cash','projection','monitor','reports','statement','allocation','allocation-email','simcopy','data','dashboard']) {
+  for(const view of ['reconciliation','matching','exposure','receivables','repayment-alerts','profit','portfolio','cash','projection','monitor','reports','statement','allocation','allocation-email','simcopy','data','audit','dashboard']) {
     await page.locator(`.nav[data-view="${view}"]`).click();
     await expect(page.locator('#content')).not.toBeEmpty();
   }
@@ -34,6 +34,14 @@ test('new note allocation is saved for Simulation Copy',async({page})=>{
   await page.getByRole('button',{name:'Save allocation'}).click();
   await expect(page.locator('#allocationMessage')).toContainText('IIF-9999 is ready');
   await expect(page.locator('#allocationSaved')).toContainText('Precision Tools Manufacturer 11');
+  let workflow=page.locator('.update-approval[data-code="IIF-9999"]');
+  await workflow.locator('xpath=..').getByLabel('Next approval status').selectOption('Ready for Approval');
+  await workflow.click();
+  await expect(page.locator('#allocationMessage')).toContainText('Ready for Approval');
+  workflow=page.locator('.update-approval[data-code="IIF-9999"]');
+  await workflow.locator('xpath=..').getByLabel('Next approval status').selectOption('Approved');
+  await workflow.click();
+  await expect(page.locator('#allocationMessage')).toContainText('Approved');
   await page.screenshot({path:'.local/allocation-generator.png',fullPage:true});
   await page.locator('.nav[data-view="allocation-email"]').click();
   await expect(page.locator('#allocationEmailPreview')).toContainText('Dear Muamalat Invest Operations Team');
@@ -69,7 +77,7 @@ test('mobile navigation and login fit the screen',async({page})=>{
   await expect(page.locator('#content .kpis').first()).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);
   await page.locator('.nav[data-view="data"]').click();
-  await expect(page.locator('.upload')).toHaveCount(3);
+  await expect(page.locator('.validated-upload')).toHaveCount(3);
   await page.goto('/login');
   await expect(page.getByLabel('Workspace password')).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);

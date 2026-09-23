@@ -35,6 +35,17 @@ def timestamp(value):
     raise ValueError('A successful transaction has an invalid date')
 
 
+def profit_components(net_amount, transaction_date):
+    """Split a net profit payout using the SST rules effective on its transaction date."""
+    net = money(net_amount)
+    taxable = transaction_date >= SST_START
+    divisor = Decimal('0.784') if taxable else Decimal('0.80')
+    gross = (net / divisor).quantize(CENT, rounding=ROUND_HALF_UP)
+    service = (gross * SERVICE_RATE).quantize(CENT, rounding=ROUND_HALF_UP)
+    sst = (service * SST_RATE).quantize(CENT, rounding=ROUND_HALF_UP) if taxable else Decimal(0)
+    return gross, service, sst
+
+
 def statement_data(data, as_of=None):
     wb = openpyxl.load_workbook(io.BytesIO(data),data_only=True,read_only=True)
     transactions = []
@@ -104,10 +115,7 @@ def statement_data(data, as_of=None):
             detailed.append(r)
             continue
         taxable = r['timestamp'].date() >= SST_START
-        divisor = Decimal('0.784') if taxable else Decimal('0.80')
-        gross = (r['amount'] / divisor).quantize(CENT, rounding=ROUND_HALF_UP)
-        service = (gross * SERVICE_RATE).quantize(CENT, rounding=ROUND_HALF_UP)
-        sst = (service * SST_RATE).quantize(CENT, rounding=ROUND_HALF_UP) if taxable else Decimal(0)
+        gross, service, sst = profit_components(r['amount'], r['timestamp'].date())
         common = {'timestamp':r['timestamp'],'order':r['order'],'note':r['note']}
         detailed.append({**common,'description':'Gross Profit','previous':r['previous'],
                          'amount':gross,'current':None})
@@ -232,8 +240,9 @@ def statement_pdf(statement):
 
 
 def register_statement_routes(app):
-    from flask import request, jsonify, send_file
-    from storage import read_source, source_rows, save_source, source_exists
+    from flask import request, jsonify, send_file, g
+    from storage import (read_source, source_rows, save_source, source_exists,
+                         save_parsed_source, audit_event)
     from uploads import validate_workbook
 
     def build():
@@ -256,6 +265,11 @@ def register_statement_routes(app):
                 data=file.read();validate_workbook('transactions',data)
                 result=statement_data(data,request.form.get('as_of'))
                 save_source('transactions',data,result['latest_date'])
+                from app import load_transactions
+                g.pop('transactions_base',None);g.pop('transactions_effective',None)
+                load_transactions()
+                save_parsed_source('transactions',source_rows()['transactions']['object_key'],g.transactions_base)
+                audit_event('Imported statement ledger','source','transactions',{'as_of':result['latest_date']})
                 result['version']=source_rows()['transactions']['object_key']
             else:
                 result=build()

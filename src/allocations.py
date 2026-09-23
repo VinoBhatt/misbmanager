@@ -6,7 +6,7 @@ import re
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-from storage import cloud, connect
+from storage import cloud, connect, audit_event
 
 FIELDS = (
     'loan_code','reference_number','company_id','issuer_name','note_name','product_type','rating',
@@ -24,8 +24,11 @@ def allocations():
         con.close()
 
 
-def allocation_map():
-    return {row['loan_code']:row for row in allocations()}
+def allocation_map(approved_only=False):
+    rows=allocations()
+    if approved_only:
+        rows=[row for row in rows if row.get('approval_status') in ('Approved','Disbursed')]
+    return {row['loan_code']:row for row in rows}
 
 
 def iso_date(value, label, required=True):
@@ -203,8 +206,8 @@ def display_reference(record):
     return reference or str(record.get('loan_code') or '')
 
 
-def allocation_email_data(record, request_date, period_end, additional_amount=0,
-                          additional_date='', reserve_amount=0, reserve_date=''):
+def allocation_email_data(record, request_date, period_end, additional_amount=None,
+                          additional_date='', reserve_amount=None, reserve_date=''):
     """Build the allocation email and its cash-position calculation."""
     from app import load_simulation, load_transactions, note_payment_schedule, num, parse_date
     request_day=date.fromisoformat(request_date); end_day=date.fromisoformat(period_end)
@@ -215,6 +218,20 @@ def allocation_email_data(record, request_date, period_end, additional_amount=0,
                 and parse_date(row.get('date')) and parse_date(row.get('date'))<=request_day]
     latest=max(successful,key=lambda row:(row.get('date') or '',int(row.get('id') or 0)),default=None)
     available=num(latest.get('current_balance')) if latest else 0
+    def inferred_movement(action, chosen_date):
+        candidates=[row for row in successful if row.get('action')==action]
+        if chosen_date:
+            candidates=[row for row in candidates if row.get('date')==chosen_date]
+        elif candidates:
+            chosen_date=max(row.get('date') for row in candidates)
+            candidates=[row for row in candidates if row.get('date')==chosen_date]
+        return sum(max(0,num(row.get('amount'))) for row in candidates),chosen_date
+    additional_inferred=additional_amount is None
+    reserve_inferred=reserve_amount is None
+    if additional_inferred:
+        additional_amount,additional_date=inferred_movement('Deposit Approved',additional_date)
+    if reserve_inferred:
+        reserve_amount,reserve_date=inferred_movement('Withdrawal Approved',reserve_date)
     portfolio,schedule=load_simulation()
     expected=0
     for items in note_payment_schedule(portfolio,schedule,successful).values():
@@ -250,7 +267,9 @@ Vinotharan'''
         'reference_number':reference,'note_name':record['note_name'],'issuer_name':record['issuer_name'],
         'amount':allocation,'request_date':request_date,'period_end':period_end,
         'additional_amount':max(0,float(additional_amount or 0)),'additional_date':additional_date,
+        'additional_source':'Transaction ledger' if additional_inferred else 'Manual override',
         'available':available,'expected':expected,'reserve':reserve,'reserve_date':reserve_date,
+        'reserve_source':'Transaction ledger' if reserve_inferred else 'Manual override',
         'total_expected':total_expected,'net_available':net_available,'additional_required':required,
         'request_date_display':slash(request_date),'period_end_display':slash(period_end),
         'additional_date_display':slash(additional_date),'reserve_date_display':slash(reserve_date),
@@ -266,6 +285,7 @@ def register_allocation_routes(app):
         if request.method=='GET': return jsonify(allocations())
         try:
             record=clean_record(request.get_json() or {});save_allocation(record)
+            audit_event('Saved allocation','allocation',record['loan_code'],{'amount':record['investment_amount']})
             return jsonify(record)
         except ValueError as error:
             return jsonify(error=str(error)),400
@@ -275,7 +295,33 @@ def register_allocation_routes(app):
         code=normalize_code(loan_code);con=connect()
         try: con.execute('DELETE FROM note_allocations WHERE loan_code=?',(code,));con.commit()
         finally: con.close()
+        audit_event('Deleted allocation','allocation',code)
         return jsonify(ok=True)
+
+    @app.patch('/api/note-allocations/<path:loan_code>/approval')
+    def update_allocation_approval(loan_code):
+        code=normalize_code(loan_code);target=str((request.get_json() or {}).get('status') or '')
+        transitions={
+            'Draft':{'Ready for Approval','Cancelled'},
+            'Ready for Approval':{'Draft','Approved','Cancelled'},
+            'Approved':{'Ready for Approval','Disbursed','Cancelled'},
+            'Disbursed':set(),
+            'Cancelled':{'Draft'},
+        }
+        con=connect()
+        try:
+            rows=list(con.execute('SELECT approval_status FROM note_allocations WHERE loan_code=?',(code,)))
+            if not rows: return jsonify(error='Allocation was not found.'),404
+            current=rows[0]['approval_status'] or 'Draft'
+            if target==current: return jsonify(ok=True,loan_code=code,approval_status=current)
+            if target not in transitions.get(current,set()):
+                return jsonify(error=f'Cannot move allocation from {current} to {target}.'),400
+            con.execute('UPDATE note_allocations SET approval_status=?,approval_updated_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE loan_code=?',(target,code))
+            con.commit()
+        finally:
+            con.close()
+        audit_event('Changed approval status','allocation',code,{'from':current,'to':target})
+        return jsonify(ok=True,loan_code=code,approval_status=target)
 
     @app.post('/api/note-allocation/extract')
     def extract_note_allocation():
@@ -310,14 +356,16 @@ dates. For a value not visible, use null. Do not infer issuer or business detail
     def allocation_email_preview():
         try:
             code=normalize_code(request.args.get('loan_code'))
-            record=allocation_map().get(code)
+            record=allocation_map(approved_only=True).get(code)
             if not record: return jsonify(error='Save the allocation note before generating its email.'),404
             request_date=iso_date(request.args.get('request_date') or record.get('allocation_date'),'Request date')
             end=iso_date(request.args.get('period_end') or month_end(date.fromisoformat(request_date)).isoformat(),'Projection end')
             additional_date=iso_date(request.args.get('additional_date'),'Additional allocation date',False)
             reserve_date=iso_date(request.args.get('reserve_date'),'Reserve withdrawal date',False)
-            additional=number(request.args.get('additional_amount') or 0,'Additional allocation',0)
-            reserve=number(request.args.get('reserve_amount') or 0,'Reserve withdrawal',0)
+            additional_raw=request.args.get('additional_amount')
+            reserve_raw=request.args.get('reserve_amount')
+            additional=number(additional_raw,'Additional allocation',0) if additional_raw not in (None,'') else None
+            reserve=number(reserve_raw,'Reserve withdrawal',0) if reserve_raw not in (None,'') else None
             return jsonify(allocation_email_data(record,request_date,end,additional,additional_date,reserve,reserve_date))
         except ValueError as error:
             return jsonify(error=str(error)),400
