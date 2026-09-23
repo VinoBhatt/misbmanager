@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
 from flask import request, g
@@ -116,6 +117,35 @@ def read_source(kind):
             raise ValueError('Stored workbook failed its integrity check')
         g.source_bytes[kind] = data
     return io.BytesIO(g.source_bytes[kind])
+
+
+def read_parsed_source(kind):
+    """Return normalized data for the currently selected workbook version."""
+    row = source_rows().get(kind)
+    if not row:
+        return None
+    con = connect()
+    try:
+        matches = list(con.execute(
+            'SELECT payload FROM parsed_sources WHERE kind=? AND object_key=?',
+            (kind, row['object_key'])
+        ))
+    finally:
+        con.close()
+    return json.loads(matches[0]['payload']) if matches else None
+
+
+def save_parsed_source(kind, object_key, payload):
+    """Store JSON-safe normalized data beside its immutable workbook version."""
+    encoded = json.dumps(payload, separators=(',', ':'), default=lambda value: value.isoformat())
+    con = connect()
+    try:
+        con.execute('''INSERT INTO parsed_sources(kind,object_key,payload) VALUES(?,?,?)
+          ON CONFLICT(kind,object_key) DO UPDATE SET payload=excluded.payload,
+          updated_at=CURRENT_TIMESTAMP''', (kind, object_key, encoded))
+        con.commit()
+    finally:
+        con.close()
 
 
 def save_source(kind, data, as_of):

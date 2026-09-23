@@ -3,7 +3,8 @@ from pathlib import Path
 from copy import copy
 from datetime import datetime, date, timedelta
 import openpyxl, json, re, io, csv, calendar
-from storage import connect, read_source, source_exists, source_rows, save_source
+from storage import (connect, read_source, source_exists, source_rows, save_source,
+                     read_parsed_source, save_parsed_source)
 
 app = Flask(__name__, static_folder=None)
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
@@ -53,6 +54,12 @@ def get_settings():
     return {'issuer_limit':num(d.get('issuer_limit',2000000))}
 
 def load_transactions():
+    cached=getattr(g,'transactions_parsed',None)
+    if cached is not None: return cached
+    cached=read_parsed_source('transactions') if source_exists('transactions') else None
+    if cached is not None:
+        g.transactions_parsed=cached
+        return cached
     if not source_exists('transactions'): return []
     wb=openpyxl.load_workbook(read_source('transactions'),data_only=True,read_only=True)
     ws=wb[wb.sheetnames[0]]
@@ -67,16 +74,28 @@ def load_transactions():
             'note': normalize_note_code(r.get('Note #')), 'transaction_no': r.get('Transaction No') or '',
             'status': r.get('Status') or '', 'date_raw': str(r.get('Date') or ''), 'date': iso(r.get('Date')), 'pay_via': r.get('Pay Via') or ''
         })
+    wb.close()
+    g.transactions_parsed=out
     return out
 
 def load_simulation():
+    cached=getattr(g,'simulation_parsed',None)
+    if cached is not None: return cached
+    cached=read_parsed_source('simulation') if source_exists('simulation') else None
+    if cached is not None:
+        g.simulation_display=cached['display']
+        g.simulation_parsed=(cached['portfolio'],cached['schedule'])
+        return g.simulation_parsed
     if not source_exists('simulation'): return [], []
     wb=openpyxl.load_workbook(read_source('simulation'),data_only=True,read_only=True)
     ws=wb['Query result'] if 'Query result' in wb.sheetnames else wb[wb.sheetnames[0]]
     headers=[c.value for c in next(ws.iter_rows(min_row=1,max_row=1))]
-    portfolio=[]
+    display_headers=list(headers)
+    while display_headers and display_headers[-1] is None: display_headers.pop()
+    portfolio=[];display_rows=[]
     for vals in ws.iter_rows(min_row=2,values_only=True):
         if not vals or vals[0] is None or not vals[1]: continue
+        display_rows.append(list(vals[:len(display_headers)]))
         r=dict(zip(headers,vals))
         expanded_profit='Total Gross Profit' in r
         gross_earned=num(r.get('Gross Profit Earned')) if expanded_profit else num(r.get('Gross Profit'))
@@ -105,21 +124,28 @@ def load_simulation():
         portfolio.append(item)
     schedule=[]
     if 'Sheet1' in wb.sheetnames:
-        s=wb['Sheet1']; months=[]
-        for c in range(7,14):
-            m=s.cell(4,c).value
-            if m: months.append((c,str(m)))
-        for row in range(5,s.max_row+1):
-            code=s.cell(row,1).value
+        # A ReadOnlyWorksheet reparses its XML for every cell() call. Read the
+        # small schedule table once so expanded reports stay within Worker CPU limits.
+        table=list(wb['Sheet1'].iter_rows(min_row=4,values_only=True));months=[]
+        heading=table[0] if table else ()
+        for index in range(6,min(13,len(heading))):
+            m=heading[index]
+            if m: months.append((index,str(m)))
+        for values in table[1:]:
+            code=values[0] if values else None
             if not code: continue
-            item={'loan_code':normalize_note_code(code),'monthly':num(s.cell(row,2).value),'gross_nett':s.cell(row,3).value or '',
-                  'tenure':s.cell(row,4).value or '', 'final_date':iso(s.cell(row,5).value),'payment_type':s.cell(row,6).value or '', 'months':{}}
-            for c,m in months:
-                v=s.cell(row,c).value
+            value=lambda index: values[index] if index<len(values) else None
+            item={'loan_code':normalize_note_code(code),'monthly':num(value(1)),'gross_nett':value(2) or '',
+                  'tenure':value(3) or '', 'final_date':iso(value(4)),'payment_type':value(5) or '', 'months':{}}
+            for index,m in months:
+                v=value(index)
                 if isinstance(v,(int,float)): item['months'][m]=float(v)
                 elif v: item['months'][m]=str(v)
             schedule.append(item)
-    return portfolio, schedule
+    wb.close()
+    g.simulation_display={'headers':display_headers,'rows':display_rows}
+    g.simulation_parsed=(portfolio,schedule)
+    return g.simulation_parsed
 
 
 def load_projection_history():
@@ -129,6 +155,13 @@ def load_projection_history():
     We use only the historical/realised portion to backfill old note repayment months; the live transaction
     ledger always wins when the same note/payment is present there.
     """
+    cached=getattr(g,'projection_history_parsed',None)
+    if cached is not None: return cached
+    cached=read_parsed_source('projections') if source_exists('projections') else None
+    if cached is not None:
+        for event in cached.get('events',[]): event['date']=parse_date(event.get('date'))
+        g.projection_history_parsed=cached
+        return cached
     if not source_exists('projections'): return {'cutoff':None,'events':[]}
     wb=openpyxl.load_workbook(read_source('projections'),data_only=True,read_only=True)
     # Determine the last explicitly historical month from Sheet1's "as at" blocks.
@@ -157,24 +190,46 @@ def load_projection_history():
         max_col = getattr(ws, 'max_column', 0) or 0
         max_row = getattr(ws, 'max_row', 0) or 0
         if max_col < 4 or max_row < 8:
-            return {'cutoff': cutoff.isoformat() if cutoff else None, 'events': []}
-        dates={c:parse_date(ws.cell(3,c).value) for c in range(4,max_col+1)}
+            wb.close()
+            result={'cutoff': cutoff.isoformat() if cutoff else None, 'events': []}
+            g.projection_history_parsed=result
+            return result
+        # Parse the relevant range once. Random cell access on a read-only sheet
+        # scans the underlying XML repeatedly and can exhaust Worker CPU time.
+        table=list(ws.iter_rows(min_row=3,max_row=min(51,max_row),min_col=1,max_col=max_col,values_only=True))
+        heading=table[0] if table else ()
+        dates={index:parse_date(heading[index]) for index in range(3,len(heading))}
         current_label=''
-        for r in range(8,min(52,max_row+1)):
-            label=ws.cell(r,2).value
-            typ=str(ws.cell(r,3).value or '').strip().title()
+        for values in table[5:]:
+            label=values[1] if len(values)>1 else None
+            typ=str(values[2] if len(values)>2 else '').strip().title()
             if typ not in ('Profit','Principal'): continue
             # Principal rows carry the note label; the following Profit row often carries only timing text.
             if typ=='Principal' and label: current_label=str(label)
             elif label and 'IIF' in str(label).upper(): current_label=str(label)
             code=normalize_note_code(current_label)
             if not code.startswith('IIF-'): continue
-            for c,d in dates.items():
+            for index,d in dates.items():
                 if not d or d>cutoff: continue
-                amt=ws.cell(r,c).value
+                amt=values[index] if index<len(values) else None
                 if isinstance(amt,(int,float)) and abs(float(amt))>0.005:
                     events.append({'loan_code':code,'type':typ,'date':d,'amount':float(amt),'source':'MIDAS Projections'})
-    return {'cutoff':cutoff.isoformat() if cutoff else None,'events':events}
+    wb.close()
+    result={'cutoff':cutoff.isoformat() if cutoff else None,'events':events}
+    g.projection_history_parsed=result
+    return result
+
+
+def normalized_source(kind):
+    """Parse one workbook into the compact representation used by calculations."""
+    if kind=='transactions':
+        return load_transactions()
+    if kind=='simulation':
+        portfolio,schedule=load_simulation()
+        return {'portfolio':portfolio,'schedule':schedule,'display':g.simulation_display}
+    if kind=='projections':
+        return load_projection_history()
+    raise ValueError('Invalid source kind')
 
 def ledger_payouts(transactions, code, action, exclude_special_profit=False):
     """Return successful payout totals by transaction date for a note."""
@@ -603,22 +658,37 @@ def upload(kind):
     as_of=request.form.get('as_of') or date.today().isoformat()
     if not parse_date(as_of):
         return jsonify({'error':'As-of date must be YYYY-MM-DD'}),400
+    parsed=None
     try:
         validate_workbook(kind,data)
-        # Parse and calculate using only request-local candidate bytes. Never
-        # replace the live workbook until all validation has succeeded.
+        # Parse only the candidate source before publishing it. The normalized
+        # result is stored in D1 so ordinary dashboard requests never reopen XLSX.
         source_rows()
         g.sources[kind]={'kind':kind,'object_key':'candidate','as_of':as_of}
         if 'source_bytes' not in g: g.source_bytes={}
         g.source_bytes[kind]=data
-        build_payload()
+        parsed=normalized_source(kind)
     except Exception:
         return jsonify({'error':'Workbook could not be read. Check its template, dates and amounts.'}),400
     finally:
         g.pop('sources',None)
         g.pop('source_bytes',None)
     backup=save_source(kind,data,as_of)
+    current=source_rows()[kind]
+    save_parsed_source(kind,current['object_key'],parsed)
     return jsonify({'ok':True,'backup':backup or 'First import; no previous version'})
+
+
+@app.post('/api/admin/rebuild-source-cache/<kind>')
+def rebuild_source_cache(kind):
+    """One-time/backfill route for workbooks imported before parsed D1 storage."""
+    if kind not in ('transactions','simulation','projections'):
+        return jsonify({'error':'Invalid source kind'}),400
+    row=source_rows().get(kind)
+    if not row: return jsonify({'error':'Source is not imported'}),404
+    parsed=normalized_source(kind)
+    save_parsed_source(kind,row['object_key'],parsed)
+    return jsonify({'ok':True,'kind':kind})
 
 
 def simulation_update_snapshot(as_of=None):
@@ -695,15 +765,12 @@ def simulation_update_snapshot(as_of=None):
             'Early Repayment':'Early Repayment of Principal' if early else (r.get('early_repayment','') if not completed else ''),
             'Early Repayment Date':settlement.isoformat() if early and settlement else (r.get('early_date') if not completed else None),
         }
-    # Read the displayed values from the template so copy/paste keeps all 36 columns and existing remarks/text.
-    wbv=openpyxl.load_workbook(read_source('simulation'),data_only=True,read_only=True)
-    wsv=wbv['Query result'] if 'Query result' in wbv.sheetnames else wbv[wbv.sheetnames[0]]
-    headers=[c.value for c in next(wsv.iter_rows(min_row=1,max_row=1))]
-    while headers and headers[-1] is None: headers.pop()
+    # load_simulation caches the displayed rows for this request, avoiding a
+    # second OpenPyXL parse of the same workbook on CPU-limited Workers.
+    displayed=g.simulation_display;headers=displayed['headers']
     rows=[]; template_codes=set()
-    for vals in wsv.iter_rows(min_row=2,values_only=True):
-        if not vals or vals[0] is None or not vals[1]: continue
-        arr=list(vals[:len(headers)]); code=normalize_note_code(arr[1]); template_codes.add(code)
+    for vals in displayed['rows']:
+        arr=list(vals); code=normalize_note_code(arr[1]); template_codes.add(code)
         up=updates.get(code,{})
         for i,h in enumerate(headers):
             if h in up:
