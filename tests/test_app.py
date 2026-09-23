@@ -96,6 +96,42 @@ class WebsiteTests(unittest.TestCase):
                 original.close()
             wb.close()
 
+    def test_new_note_allocation_feeds_simulation_copy(self):
+        snapshot=self.client.get('/api/simulation-preview').json
+        missing=snapshot['missing_notes'][0]
+        payload={
+            'loan_code':missing['loan_code'],'company_id':6001,'issuer_name':'Example Manufacturing Sdn Bhd',
+            'note_name':'Precision Tools Manufacturer 11','product_type':'Islamic Invoice Financing (IIF) - Receivables',
+            'rating':'CR6','business_description':'Precision component manufacturing and invoice financing.',
+            'investment_amount':missing['allocated'],'loan_note_size':386000,'allocation_date':'2026-09-17',
+            'disbursal_date':'2026-09-25','payment_type':'Profit Only','term':90,'tenor_type':'Days',
+            'gross_pa':15.6,'campaign_start':'2026-09-17','campaign_end':'2026-09-24',
+            'status':'Active','remarks':'Generated from note card'
+        }
+        response=self.client.post('/api/note-allocations',json=payload)
+        self.assertEqual(response.status_code,200,response.data)
+        self.assertEqual(response.json['gross_pa'],.156)
+        email=self.client.get('/api/allocation-email-preview',query_string={
+            'loan_code':missing['loan_code'],'request_date':'2026-09-17','period_end':'2026-09-30',
+            'additional_amount':'7000000','additional_date':'2026-09-01',
+            'reserve_amount':'645175.47','reserve_date':'2026-09-02'
+        })
+        self.assertEqual(email.status_code,200,email.data)
+        self.assertEqual(email.json['reference_number'],missing['loan_code'].replace('-','')+'-17092026')
+        self.assertAlmostEqual(email.json['total_expected'],email.json['available']+email.json['expected']-email.json['reserve'])
+        self.assertAlmostEqual(email.json['net_available'],email.json['total_expected']-missing['allocated'])
+        self.assertIn('Dear Muamalat Invest Operations Team',email.json['plain_text'])
+        refreshed=self.client.get('/api/simulation-preview').json
+        self.assertNotIn(missing['loan_code'],[item['loan_code'] for item in refreshed['missing_notes']])
+        index=refreshed['headers'].index('Loan Code')
+        self.assertIn(missing['loan_code'],[row[index] for row in refreshed['rows']])
+        exported=self.client.get('/api/export/updated-simulation.xlsx')
+        workbook=openpyxl.load_workbook(io.BytesIO(exported.data),data_only=True)
+        sheet=workbook['Query result']
+        self.assertIn(missing['loan_code'],[sheet.cell(row,2).value for row in range(2,sheet.max_row+1)])
+        workbook.close()
+        self.assertEqual(self.client.delete('/api/note-allocations/'+missing['loan_code']).status_code,200)
+
     def test_invalid_upload_does_not_replace_source(self):
         before=self.client.get('/api/data').json['summary']
         response=self.client.post('/api/upload/transactions',data={'file':(io.BytesIO(b'not excel'),'bad.xlsx')})
@@ -109,6 +145,41 @@ class WebsiteTests(unittest.TestCase):
         with closing(sqlite3.connect(Path(self.directory.name)/'misb_tracker.db')) as con, con:
             self.assertIsNotNone(con.execute('SELECT 1 FROM workbook_versions WHERE object_key=?',(response.json['backup'],)).fetchone())
         self.assertEqual(self.client.get('/api/data').json['summary'],self.original_payload['summary'])
+
+    def test_expanded_profit_simulation_format_is_accepted(self):
+        headers=['No.','Loan Code','Company ID','Issuer Name','Note Name','Product Type',
+                 'CTOS/Payment Risk Rating **','Business Description','Investment Amount','Loan Note Size',
+                 'Email on Allocation','Email on Disbursement','Investment Exposure',
+                 'Total exposure against portfolio <20%','Payment Type **','Term','Tenor Type',
+                 'Disbursal Date','Final Repayment Date ','Loan Status','Interest Rate p.a (Gross)',
+                 'Interest Rate p.m (Gross)','Interest Rate p.m (Net)','Expected Repayment',
+                 'Actual Repayment **','Paid Principal','Unpaid Principal','Gross Profit Earned',
+                 'Total Gross Profit','Late Payment Charges','Service Fee ','SST','Net Profit',
+                 'Paid Profit','Unpaid Profit','Early Repayment','Early Repayment Date','Remarks','Installment']
+        values={
+            'No.':1,'Loan Code':'IIF-9998','Company ID':6001,'Issuer Name':'FORMAT TEST SDN BHD',
+            'Note Name':'Expanded Profit Test','Product Type':'Islamic Invoice Financing (IIF) - Receivables',
+            'Investment Amount':100000,'Loan Note Size':200000,'Investment Exposure':.5,
+            'Payment Type **':'Profit Only','Term':3,'Tenor Type':'Months','Disbursal Date':'2026-09-01',
+            'Final Repayment Date ':'2026-12-01','Loan Status':'Disbursed','Interest Rate p.a (Gross)':.15,
+            'Interest Rate p.m (Gross)':.0125,'Interest Rate p.m (Net)':.01,'Expected Repayment':103000,
+            'Actual Repayment **':0,'Paid Principal':0,'Unpaid Principal':100000,
+            'Gross Profit Earned':3750,'Total Gross Profit':3800,'Late Payment Charges':50,
+            'Service Fee ':760,'SST':20,'Net Profit':3020,'Paid Profit':1000,'Unpaid Profit':2020,
+            'Installment':1250
+        }
+        wb=openpyxl.Workbook();ws=wb.active;ws.title='Query result';ws.append(headers);ws.append([values.get(h) for h in headers])
+        schedule=wb.create_sheet('Sheet1')
+        for column,value in enumerate(['Notes','Monthly','Gross/Nett','Tenure','Final Repayment Date','Pmt Type','Sept'],1):
+            schedule.cell(4,column).value=value
+        content=io.BytesIO();wb.save(content);wb.close();content.seek(0)
+        response=self.client.post('/api/upload/simulation',data={'as_of':'2026-09-15','file':(content,'expanded.xlsx')})
+        self.assertEqual(response.status_code,200,response.data)
+        row=self.client.get('/api/data').json['portfolio'][0]
+        self.assertEqual(row['report_format'],'expanded-profit')
+        self.assertEqual(row['gross_profit'],3800)
+        self.assertEqual(row['late_profit'],50)
+        self.assertEqual(row['sst'],20)
 
     def test_empty_workspace_accepts_first_import(self):
         with tempfile.TemporaryDirectory() as directory:

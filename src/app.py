@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, request, send_file, g
 from pathlib import Path
+from copy import copy
 from datetime import datetime, date, timedelta
 import openpyxl, json, re, io, csv, calendar
 from storage import connect, read_source, source_exists, source_rows, save_source
@@ -77,7 +78,10 @@ def load_simulation():
     for vals in ws.iter_rows(min_row=2,values_only=True):
         if not vals or vals[0] is None or not vals[1]: continue
         r=dict(zip(headers,vals))
-        portfolio.append({
+        expanded_profit='Total Gross Profit' in r
+        gross_earned=num(r.get('Gross Profit Earned')) if expanded_profit else num(r.get('Gross Profit'))
+        total_gross=num(r.get('Total Gross Profit')) if expanded_profit else num(r.get('Gross Profit'))
+        item={
             'loan_code': normalize_note_code(r.get('Loan Code')),
             'issuer': r.get('Issuer Name') or '', 'note_name': r.get('Note Name') or '', 'product': r.get('Product Type') or '',
             'rating': r.get('CTOS/Payment Risk Rating **') or '', 'business': r.get('Business Description') or '',
@@ -88,10 +92,17 @@ def load_simulation():
             'gross_pm': num(r.get('Interest Rate p.m (Gross)')), 'net_pm': num(r.get('Interest Rate p.m (Net)')),
             'expected_repayment': num(r.get('Expected Repayment')), 'actual_repayment': num(r.get('Actual Repayment **')),
             'paid_principal': num(r.get('Paid Principal')), 'unpaid_principal': num(r.get('Unpaid Principal')),
-            'gross_profit': num(r.get('Gross Profit')), 'net_profit': num(r.get('Net Profit')), 'paid_profit': num(r.get('Paid Profit')),
-            'unpaid_profit': num(r.get('Unpaid Profit')), 'late_profit': num(r.get('Late Profit')), 'service_fee': num(r.get('Service Fee ')),
+            'gross_profit':total_gross,
+            'net_profit': num(r.get('Net Profit')), 'paid_profit': num(r.get('Paid Profit')),
+            'unpaid_profit': num(r.get('Unpaid Profit')),
+            'late_profit': num(r.get('Late Payment Charges')) if expanded_profit else num(r.get('Late Profit')),
+            'service_fee': num(r.get('Service Fee ')),
             'early_repayment': r.get('Early Repayment') or '', 'early_date': iso(r.get('Early Repayment Date')), 'remarks': r.get('Remarks') or ''
-        })
+        }
+        if expanded_profit:
+            item.update({'gross_profit_earned':gross_earned,'sst':num(r.get('SST')),
+                         'installment':r.get('Installment'),'report_format':'expanded-profit'})
+        portfolio.append(item)
     schedule=[]
     if 'Sheet1' in wb.sheetnames:
         s=wb['Sheet1']; months=[]
@@ -625,7 +636,8 @@ def simulation_update_snapshot(as_of=None):
         inv=max(0,num(r.get('investment_amount')))
         paid_principal=sum(num(t.get('amount')) for t in note_tx if t.get('action')=='Principal Payout')
         tawidh=sum(num(t.get('amount')) for t in note_tx if t.get('action')=='Profit Payout' and ('tawidh' in str(t.get('transaction_no') or '').lower() or "ta'widh" in str(t.get('transaction_no') or '').lower()))
-        paid_profit=sum(num(t.get('amount')) for t in note_tx if t.get('action')=='Profit Payout' and not ('tawidh' in str(t.get('transaction_no') or '').lower() or "ta'widh" in str(t.get('transaction_no') or '').lower()))
+        all_profit=sum(num(t.get('amount')) for t in note_tx if t.get('action')=='Profit Payout')
+        paid_profit=all_profit if r.get('report_format')=='expanded-profit' else all_profit-tawidh
         unpaid_principal=max(0,inv-paid_principal)
         settlement=None; running=0.0
         principal_events=[]
@@ -644,25 +656,42 @@ def simulation_update_snapshot(as_of=None):
         early=bool(completed and settlement and final and settlement<final)
         original_net=max(0,num(r.get('net_profit')))
         original_gross=max(0,num(r.get('gross_profit')))
-        if completed:
-            expected_net=paid_profit
-            unpaid_profit=0.0
+        expanded=r.get('report_format')=='expanded-profit'
+        sst=max(0,num(r.get('sst')))
+        gross_earned=max(0,num(r.get('gross_profit_earned')))
+        late_charge=max(0,num(r.get('late_profit')))
+        if completed and expanded:
+            expected_net=paid_profit;unpaid_profit=0.0
+            gross_profit=(expected_net+sst)/0.8 if expected_net or sst else 0
+            if early:
+                gross_earned=gross_profit;late_charge=0
+            else:
+                late_charge=max(0,gross_profit-gross_earned)
+            service_fee=max(0,gross_profit*.2)
+        elif completed:
+            expected_net=paid_profit;unpaid_profit=0.0
+            gross_profit=(expected_net/0.8 if expected_net else original_gross)
+            service_fee=max(0,gross_profit-expected_net)
         else:
-            expected_net=original_net
-            unpaid_profit=max(0,expected_net-paid_profit)
-        gross_profit=(expected_net/0.8 if completed and expected_net else original_gross)
-        service_fee=max(0,gross_profit-expected_net) if completed else max(0,num(r.get('service_fee')))
+            expected_net=original_net;unpaid_profit=max(0,expected_net-paid_profit)
+            gross_profit=original_gross;service_fee=max(0,num(r.get('service_fee')))
         updates[code]={
+            '_expanded':expanded,
             'Loan Status':'Completed' if completed else r.get('loan_status',''),
             'Actual Repayment **':paid_principal+paid_profit,
             'Paid Principal':paid_principal,
             'Unpaid Principal':unpaid_principal,
             'Gross Profit':gross_profit,
+            'Gross Profit Earned':gross_earned,
+            'Total Gross Profit':gross_profit,
             'Net Profit':expected_net,
             'Paid Profit':paid_profit,
             'Unpaid Profit':unpaid_profit,
             'Late Profit':tawidh,
+            'Late Payment Charges':late_charge,
             'Service Fee ':service_fee,
+            'SST':sst,
+            'Installment':r.get('installment',''),
             'Early Repayment':'Early Repayment of Principal' if early else (r.get('early_repayment','') if not completed else ''),
             'Early Repayment Date':settlement.isoformat() if early and settlement else (r.get('early_date') if not completed else None),
         }
@@ -688,6 +717,11 @@ def simulation_update_snapshot(as_of=None):
     for t in tx:
         if t.get('action')=='Investment Committed' and t.get('note'):
             ledger_alloc[t['note']]=ledger_alloc.get(t['note'],0)+num(t.get('amount'))
+    from allocations import allocation_map, row_values
+    saved_allocations=allocation_map()
+    for code,record in sorted(saved_allocations.items()):
+        if code in template_codes: continue
+        rows.append(row_values(headers,record,len(rows)+1));template_codes.add(code)
     missing=[{'loan_code':c,'allocated':a} for c,a in sorted(ledger_alloc.items()) if c not in template_codes]
     return {'headers':headers,'rows':rows,'updates':updates,'missing_notes':missing,'as_of':as_of or (max([t.get('date') for t in tx if t.get('date')],default=''))}
 
@@ -704,7 +738,10 @@ def build_updated_simulation_workbook(as_of=None):
         up=snap['updates'].get(code)
         if not up: continue
         # Inputs sourced from the ledger. Derived cells retain the template's formula-driven style.
-        for h in ['Loan Status','Paid Principal','Paid Profit','Late Profit','Early Repayment','Early Repayment Date']:
+        input_fields=['Loan Status','Paid Principal','Paid Profit','Late Profit','Early Repayment','Early Repayment Date']
+        if up.get('_expanded') and up.get('Loan Status')=='Completed':
+            input_fields+=['Gross Profit Earned','Late Payment Charges','SST']
+        for h in input_fields:
             if h not in hidx: continue
             v=up.get(h)
             if h=='Early Repayment Date' and v:
@@ -713,7 +750,7 @@ def build_updated_simulation_workbook(as_of=None):
         # When a note is completed early, its expected profit itself changes to the realised pro-rated amount.
         if up.get('Early Repayment') and up.get('Loan Status')=='Completed':
             if 'Gross Profit' in hidx: ws.cell(row,hidx['Gross Profit']).value=up['Gross Profit']
-            if 'Net Profit' in hidx: ws.cell(row,hidx['Net Profit']).value=up['Net Profit']
+            if 'Net Profit' in hidx and 'Total Gross Profit' not in hidx: ws.cell(row,hidx['Net Profit']).value=up['Net Profit']
         # Re-apply the same core formulas used in the original MISB template for the transaction-driven fields.
         if 'Actual Repayment **' in hidx and 'Paid Principal' in hidx and 'Paid Profit' in hidx:
             ws.cell(row,hidx['Actual Repayment **']).value=f'={openpyxl.utils.get_column_letter(hidx["Paid Principal"])}{row}+{openpyxl.utils.get_column_letter(hidx["Paid Profit"])}{row}'
@@ -721,8 +758,27 @@ def build_updated_simulation_workbook(as_of=None):
             ws.cell(row,hidx['Unpaid Principal']).value=f'={openpyxl.utils.get_column_letter(hidx["Investment Amount"])}{row}-{openpyxl.utils.get_column_letter(hidx["Paid Principal"])}{row}'
         if 'Unpaid Profit' in hidx and 'Net Profit' in hidx and 'Paid Profit' in hidx:
             ws.cell(row,hidx['Unpaid Profit']).value=f'={openpyxl.utils.get_column_letter(hidx["Net Profit"])}{row}-{openpyxl.utils.get_column_letter(hidx["Paid Profit"])}{row}'
-        if 'Service Fee ' in hidx and 'Gross Profit' in hidx and 'Net Profit' in hidx:
+        if 'Service Fee ' in hidx and 'Total Gross Profit' in hidx:
+            ws.cell(row,hidx['Service Fee ']).value=f'={openpyxl.utils.get_column_letter(hidx["Total Gross Profit"])}{row}*20%'
+        elif 'Service Fee ' in hidx and 'Gross Profit' in hidx and 'Net Profit' in hidx:
             ws.cell(row,hidx['Service Fee ']).value=f'={openpyxl.utils.get_column_letter(hidx["Gross Profit"])}{row}-{openpyxl.utils.get_column_letter(hidx["Net Profit"])}{row}'
+        if 'Net Profit' in hidx and 'Total Gross Profit' in hidx and 'Service Fee ' in hidx and 'SST' in hidx:
+            ws.cell(row,hidx['Net Profit']).value=f'={openpyxl.utils.get_column_letter(hidx["Total Gross Profit"])}{row}-{openpyxl.utils.get_column_letter(hidx["Service Fee "])}{row}-{openpyxl.utils.get_column_letter(hidx["SST"])}{row}'
+    from allocations import allocation_map, row_values
+    existing={normalize_note_code(ws.cell(row,2).value) for row in range(2,ws.max_row+1)}
+    for code,record in sorted(allocation_map().items()):
+        if code in existing: continue
+        target=ws.max_row+1; source=max(2,target-1)
+        for column in range(1,len(headers)+1):
+            original=ws.cell(source,column); cell=ws.cell(target,column)
+            if original.has_style:
+                cell._style=copy(original._style)
+            if original.number_format: cell.number_format=original.number_format
+            if original.alignment: cell.alignment=copy(original.alignment)
+            if original.protection: cell.protection=copy(original.protection)
+        for column,value in enumerate(row_values(headers,record,target-1),1):
+            ws.cell(target,column).value=value
+        existing.add(code)
     # Keep every sheet, comment/note, style, column width and existing Remarks cell from the imported template.
     try:
         wb.calculation.fullCalcOnLoad=True; wb.calculation.forceFullCalc=True; wb.calculation.calcMode='auto'
@@ -835,3 +891,5 @@ from web import configure_web
 configure_web(app)
 from statements import register_statement_routes
 register_statement_routes(app)
+from allocations import register_allocation_routes
+register_allocation_routes(app)

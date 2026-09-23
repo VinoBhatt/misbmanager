@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS note_allocations (
+ loan_code TEXT PRIMARY KEY,
+ company_id INTEGER,
+ issuer_name TEXT NOT NULL,
+ note_name TEXT NOT NULL,
+ product_type TEXT NOT NULL,
+ rating TEXT DEFAULT '',
+ business_description TEXT DEFAULT '',
+ investment_amount REAL NOT NULL,
+ loan_note_size REAL NOT NULL,
+ allocation_date TEXT NOT NULL,
+ disbursal_date TEXT NOT NULL,
+ payment_type TEXT NOT NULL,
+ term INTEGER NOT NULL,
+ tenor_type TEXT NOT NULL,
+ gross_pa REAL NOT NULL,
+ campaign_start TEXT DEFAULT '',
+ campaign_end TEXT DEFAULT '',
+ status TEXT DEFAULT 'Active',
+ remarks TEXT DEFAULT '',
+ updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);

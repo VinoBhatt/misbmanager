@@ -5,6 +5,7 @@
   "compatibility_date": "2026-09-21",
   "compatibility_flags": ["python_workers"],
   "assets": {"directory": "./public", "binding": "ASSETS", "run_worker_first": true},
+  "ai": {"binding": "AI", "remote": true},
   "d1_databases": [{"binding": "DB", "database_name": "misb-manager", "database_id": "21475a4a-6424-409d-a926-d16de4baac85", "migrations_dir": "migrations"}],
   "observability": {"enabled": true, "head_sampling_rate": 1}
 }

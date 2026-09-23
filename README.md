@@ -2,13 +2,14 @@
 
 A password-protected fund management website for Cloudflare Workers, adapted from the original MISB Fund Tracker. Keeps the original portfolio calculations and Excel workflows.
 
-Includes Fund Overview, Issuer Exposure, Receivables, Profit Analytics, Active Portfolio, Account & Ledger, Cash Projection, Monitoring, MISB Reports, Simulation Copy, and Data Sources.
+Includes Fund Overview, Issuer Exposure, Receivables, Profit Analytics, Active Portfolio, Account & Ledger, Cash Projection, Monitoring, MISB Reports, Account Statement PDF, New Note Allocation, Allocation Email, Simulation Copy, and Data Sources.
 
 ## Architecture
 
 - Python Workers / Flask: calculations, authenticated API and Excel generation.
 - Workers Static Assets: responsive HTML, CSS and JavaScript.
-- D1: monitoring, payment marks, issuer settings, cashflow plans, uploaded workbooks and previous workbook versions. Files are never served as public assets. No R2 account or bucket is required.
+- D1: monitoring, payment marks, issuer settings, cashflow plans, new-note allocation records, uploaded workbooks and previous workbook versions. Files are never served as public assets. No R2 account or bucket is required.
+- Workers AI: reads uploaded Cofundr note-card screenshots to prefill allocation fields. Screenshots are processed for the request and are not retained.
 - Shared workspace password and signed eight-hour HttpOnly session. This is a single shared workspace, without per-user roles or a user audit trail.
 
 ## Preview on this computer
@@ -117,7 +118,7 @@ npx wrangler d1 migrations apply misb-manager --remote
 npm run deploy
 ```
 
-Migration `0002_workbook_storage.sql` adds workbook storage without altering existing monitoring or payment records. It has already been applied to this project's configured cloud database. Fresh installations still need both migrations. The Worker is named `misbmanager`; its database is `misb-manager`.
+Migration `0002_workbook_storage.sql` adds workbook storage without altering existing monitoring or payment records. Migrations `0003_note_allocations.sql` and `0004_allocation_reference.sql` add new-note records and retain the full Cofundr reference number. Fresh installations must apply every migration. The Worker is named `misbmanager`; its database is `misb-manager`.
 
 Existing local preview files are imported into SQLite automatically on the next `scripts/local.py` startup. If workbooks were uploaded to an earlier R2 installation, re-import those originals through Data Sources; remote R2 data is not copied or deleted automatically.
 
@@ -149,6 +150,20 @@ The supplied September 22 log, cut off at September 2, produces 679 detail rows 
 Uploads accept `.xlsx` files up to 10 MB, with bounded archive expansion. Required columns and calculations are validated before publishing the new version. Rejected uploads leave the current version intact. Workbooks are stored as ordered, base64-encoded chunks in D1, with a size and SHA-256 integrity check. The complete workbook and current-version pointer are saved in one atomic transaction. Chunking preserves the 10 MB upload allowance while staying within D1 row limits. Each successful upload retains its predecessor in the database; no retention deletion runs automatically. Base64 encoding adds approximately one-third storage overhead. D1's `sources` table identifies the current versions.
 
 Excel exports preserve the simulation template's sheets, formulas, styling and Remarks. Excel recalculates formulas when opening the updated simulation. The bi-weekly report is a current monitoring snapshot: its report date labels the report and does not filter historical activity. Simulation Copy supports its original ledger cut-off workflow.
+
+Simulation imports support both MISB layouts. The original layout uses `Gross Profit` and `Late Profit`; the September 2026 layout uses `Gross Profit Earned`, `Total Gross Profit`, `Late Payment Charges`, `SST`, and `Installment`. Header-based mapping keeps dashboard totals independent of column position. Simulation Copy preserves the matching layout and refreshes its repayment formulas using the column names present in the uploaded template.
+
+### New Note Allocation
+
+Open **New Note Allocation** and upload a PNG, JPEG or WebP screenshot of the Cofundr note card. **Read screenshot** prefills the note name, reference number, note type, risk rating, financing amount, outstanding amount, profit rate, tenure, campaign dates and status. Review those values and complete the issuer name, company ID, business description, MISB allocation, payment type and disbursal date.
+
+Saving normalizes a Cofundr reference such as `IIF2113-17092026` to the simulation loan code `IIF-2113`, calculates exposure, repayment date, expected repayment, gross and net profit, and service fee, and stores the record in D1. Saved notes are automatically appended to the next **Simulation Copy** preview and Excel export; a matching ledger allocation is then treated as resolved. The screenshot itself is not stored, and R2 is not used.
+
+### Allocation Email
+
+Open **Allocation Email** and select a saved note to produce the Muamalat Invest email and its formatted Crowd Sense cash-projection table. The generator takes the fund balance from the last successful ledger entry on the request date and totals unpaid simulation principal and profit scheduled between the request date and the selected projection end. It then calculates `D = A + B - C`, net available fund `D - E`, and any additional fund required when `E` exceeds `D`.
+
+The additional fund allocation and reserve withdrawal amounts and dates remain editable because they are not present in the imported simulation report. The browser remembers the most recently entered values. **Copy formatted email** places an HTML table and a plain-text fallback on the clipboard for pasting into an email client; the Cofundr note screenshot still needs to be attached before sending.
 
 ## Verification
 

@@ -12,8 +12,12 @@ sys.path.insert(0,str(ROOT/'src'))
 def initialize(directory, seed=None):
     directory.mkdir(parents=True,exist_ok=True)
     con=sqlite3.connect(directory/'misb_tracker.db')
+    con.execute('CREATE TABLE IF NOT EXISTS local_migrations(name TEXT PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)')
     for migration in sorted((ROOT/'migrations').glob('*.sql')):
+        if con.execute('SELECT 1 FROM local_migrations WHERE name=?',(migration.name,)).fetchone():
+            continue
         con.executescript(migration.read_text())
+        con.execute('INSERT INTO local_migrations(name) VALUES(?)',(migration.name,))
     from storage import workbook_statements
     # Carry existing local workbook files into SQLite without changing pointers.
     for key, in con.execute('SELECT object_key FROM sources').fetchall():

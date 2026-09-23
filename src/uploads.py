@@ -31,6 +31,11 @@ def validate_workbook(kind, data):
             return
         if not required.issubset(set(headers)):
             raise ValueError('Required columns are missing')
+        if kind == 'simulation':
+            legacy={'Gross Profit','Late Profit','Service Fee ','Net Profit'}
+            expanded={'Gross Profit Earned','Total Gross Profit','Late Payment Charges','Service Fee ','SST','Net Profit','Installment'}
+            if not (legacy.issubset(set(headers)) or expanded.issubset(set(headers))):
+                raise ValueError('The simulation profit columns are not a supported format')
         if (sheet.max_row or 0) > 50000 or (sheet.max_column or 0) > 500:
             raise ValueError('Workbook dimensions exceed supported limits')
     finally:
