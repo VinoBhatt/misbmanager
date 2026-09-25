@@ -169,6 +169,8 @@ Saving normalizes a Cofundr reference such as `IIF2113-17092026` to the simulati
 
 New allocations follow `Draft → Ready for Approval → Approved → Disbursed`. Only Approved and Disbursed records can enter Simulation Copy or the allocation email. A record can be cancelled or returned for correction through the permitted workflow transitions.
 
+Each generated simulation workbook records its cut-off date, row counts and a compact note-level comparison snapshot in D1. The Simulation Generator compares the current approved preview with the most recently generated report and lists new, removed and financially changed notes. Draft preview rows are never included in the saved comparison or downloaded workbook.
+
 The **Repayment Alerts** view combines unpaid principal and profit schedule items into overdue, seven-day, and thirty-day queues with note, issuer, due date, and expected amount.
 
 The **Audit Log** records workbook imports and restorations, allocation approvals, transaction assignments, issuer-limit changes, monitoring updates, and planned cash-flow changes.

@@ -96,8 +96,41 @@ class WebsiteTests(unittest.TestCase):
                 original.close()
             wb.close()
 
+    def test_simulation_report_history_and_comparison(self):
+        before=self.client.get('/api/simulation-preview',query_string={'as_of':'2026-09-21'}).json
+        self.assertFalse(before['comparison']['has_prior'])
+        generated=self.client.get('/api/export/updated-simulation.xlsx',query_string={'as_of':'2026-09-21','warnings_reviewed':'1'})
+        self.assertEqual(generated.status_code,200)
+        history=self.client.get('/api/simulation-report-runs').json
+        self.assertEqual(len(history),1)
+        self.assertEqual(history[0]['as_of'],'2026-09-21')
+        self.assertEqual(history[0]['total_rows'],len(before['rows']))
+        self.assertNotIn('snapshot',history[0])
+        selected=self.client.get('/api/simulation-preview',query_string={'as_of':'2026-09-21','compare_to':history[0]['id']}).json
+        self.assertTrue(selected['comparison']['has_prior'])
+        self.assertEqual(selected['comparison']['prior_id'],history[0]['id'])
+        missing=self.client.get('/api/simulation-preview',query_string={'compare_to':999999}).json
+        self.assertFalse(missing['comparison']['has_prior'])
+        self.assertEqual(missing['comparison']['requested_id'],999999)
+        self.assertEqual(self.client.get('/api/simulation-preview',query_string={'compare_to':'bad'}).status_code,400)
+        after=self.client.get('/api/simulation-preview',query_string={'as_of':'2026-09-21'}).json
+        self.assertTrue(after['comparison']['has_prior'])
+        self.assertEqual(after['comparison']['new_notes'],[])
+        self.assertEqual(after['comparison']['removed_notes'],[])
+        self.assertTrue(any(row['action']=='Generated simulation report' for row in self.client.get('/api/audit-events').json))
+
     def test_new_note_allocation_feeds_simulation_copy(self):
         snapshot=self.client.get('/api/simulation-preview').json
+        code_index=snapshot['headers'].index('Loan Code');investment_index=snapshot['headers'].index('Investment Amount')
+        baseline_row=next(row for row in snapshot['rows'] if row[code_index] and float(row[investment_index] or 0)>0)
+        baseline_overpayment={'id':999997,'date':'2026-09-20','action':'Principal Payout',
+                              'amount':float(baseline_row[investment_index])+1,'note':baseline_row[code_index],
+                              'status':'SUCCESSFUL','transaction_no':'baseline overpayment test',
+                              'current_balance':0,'previous_balance':0,'pay_via':''}
+        with patch('app.load_transactions',return_value=self.client.get('/api/data').json['transactions']+[baseline_overpayment]):
+            baseline_invalid=self.client.get('/api/simulation-preview',query_string={'as_of':'2026-09-21'}).json
+        self.assertTrue(any(issue['code']=='principal-overpayment' and issue['loan_code']==baseline_row[code_index]
+                            for issue in baseline_invalid['validation']['issues']))
         missing=snapshot['missing_notes'][0]
         self.assertEqual(snapshot['baseline_row_count'],len(snapshot['rows']))
         self.assertEqual(snapshot['added_entries'],[])
@@ -113,6 +146,10 @@ class WebsiteTests(unittest.TestCase):
             'gross_pa':15.6,'campaign_start':'2026-09-17','campaign_end':'2026-09-24',
             'status':'Active','remarks':'Generated from note card'
         }
+        duplicate={**payload,'loan_code':self.client.get('/api/data').json['portfolio'][0]['loan_code']}
+        response=self.client.post('/api/note-allocations',json=duplicate)
+        self.assertEqual(response.status_code,409,response.data)
+        self.assertIn('historical simulation baseline',response.json['error'])
         response=self.client.post('/api/note-allocations',json=payload)
         self.assertEqual(response.status_code,200,response.data)
         self.assertEqual(response.json['gross_pa'],.156)
@@ -120,12 +157,51 @@ class WebsiteTests(unittest.TestCase):
         self.assertIn(missing['loan_code'],[item['loan_code'] for item in draft['missing_notes']])
         self.assertIn(missing['loan_code'],[item['loan_code'] for item in draft['pending_entries']])
         self.assertEqual(len(draft['rows']),draft['baseline_row_count'])
+        draft_preview=self.client.get('/api/simulation-preview',query_string={'include_drafts':'1'}).json
+        self.assertIn(missing['loan_code'],[item['loan_code'] for item in draft_preview['draft_preview_entries']])
+        self.assertIn(missing['loan_code'],[row[draft_preview['headers'].index('Loan Code')] for row in draft_preview['new_entry_rows']])
+        self.assertEqual(len(draft_preview['rows']),draft_preview['baseline_row_count']+1)
+        # A draft preview never changes the final downloadable workbook.
+        draft_export=self.client.get('/api/export/updated-simulation.xlsx',query_string={'warnings_reviewed':'1'})
+        draft_workbook=openpyxl.load_workbook(io.BytesIO(draft_export.data),data_only=True)
+        self.assertNotIn(missing['loan_code'],[draft_workbook['Query result'].cell(row,2).value for row in range(2,draft_workbook['Query result'].max_row+1)])
+        draft_workbook.close()
         self.assertIn(missing['loan_code'],[item['loan_code'] for item in self.client.get('/api/data').json['pending_allocations']])
         response=self.client.patch('/api/note-allocations/'+missing['loan_code']+'/approval',json={'status':'Ready for Approval'})
         self.assertEqual(response.status_code,200,response.data)
         response=self.client.patch('/api/note-allocations/'+missing['loan_code']+'/approval',json={'status':'Approved'})
         self.assertEqual(response.status_code,200,response.data)
         self.assertNotIn(missing['loan_code'],[item['loan_code'] for item in self.client.get('/api/data').json['pending_allocations']])
+        before_entry=self.client.get('/api/simulation-preview',query_string={'as_of':'2026-09-16'}).json
+        self.assertNotIn(missing['loan_code'],[item['loan_code'] for item in before_entry['added_entries']])
+        self.assertIn(missing['loan_code'],[item['loan_code'] for item in before_entry['future_entries']])
+        edited={**payload,'remarks':'Reviewed campaign particulars'}
+        self.assertEqual(self.client.post('/api/note-allocations',json=edited).status_code,200)
+        saved=next(row for row in self.client.get('/api/note-allocations').json if row['loan_code']==missing['loan_code'])
+        self.assertEqual(saved['approval_status'],'Approved')
+        history=self.client.get('/api/note-allocations/'+missing['loan_code']+'/history').json
+        self.assertEqual([row['action'] for row in history],['Updated','Approval changed','Approval changed','Created'])
+        self.assertEqual(history[0]['changed_fields'],['remarks'])
+        transactions=self.client.get('/api/data').json['transactions']
+        repayment={'id':999999,'date':'2026-09-20','action':'Principal Payout','amount':1000,
+                   'note':missing['loan_code'],'status':'SUCCESSFUL','transaction_no':'test repayment',
+                   'current_balance':0,'previous_balance':0,'pay_via':''}
+        with patch('app.load_transactions',return_value=transactions+[repayment]):
+            serviced=self.client.get('/api/simulation-preview',query_string={'as_of':'2026-09-21'}).json
+        loan_index=serviced['headers'].index('Loan Code');paid_index=serviced['headers'].index('Paid Principal')
+        generated=next(row for row in serviced['new_entry_rows'] if row[loan_index]==missing['loan_code'])
+        self.assertEqual(generated[paid_index],1000)
+        self.assertTrue(serviced['validation']['can_generate'])
+        self.assertGreater(serviced['report_totals']['Investment Amount'],0)
+        self.assertEqual(serviced['capacity']['issuer_limit'],self.client.get('/api/data').json['settings']['issuer_limit'])
+        self.assertIn('available_cash',serviced['capacity'])
+        overpayment={**repayment,'id':999998,'amount':missing['allocated']+1}
+        with patch('app.load_transactions',return_value=transactions+[overpayment]):
+            invalid=self.client.get('/api/simulation-preview',query_string={'as_of':'2026-09-21'}).json
+            blocked=self.client.get('/api/export/updated-simulation.xlsx',query_string={'as_of':'2026-09-21'})
+        self.assertFalse(invalid['validation']['can_generate'])
+        self.assertTrue(any(issue['code']=='principal-overpayment' for issue in invalid['validation']['issues']))
+        self.assertEqual(blocked.status_code,422)
         email=self.client.get('/api/allocation-email-preview',query_string={
             'loan_code':missing['loan_code'],'request_date':'2026-09-17','period_end':'2026-09-30',
             'additional_amount':'7000000','additional_date':'2026-09-01',
@@ -152,11 +228,30 @@ class WebsiteTests(unittest.TestCase):
         self.assertEqual(len(refreshed['rows']),refreshed['baseline_row_count']+1)
         index=refreshed['headers'].index('Loan Code')
         self.assertIn(missing['loan_code'],[row[index] for row in refreshed['rows']])
-        exported=self.client.get('/api/export/updated-simulation.xlsx')
+        warning_gate=self.client.get('/api/export/updated-simulation.xlsx')
+        self.assertEqual(warning_gate.status_code,409)
+        self.assertIn('acknowledge',warning_gate.json['error'])
+        exported=self.client.get('/api/export/updated-simulation.xlsx',query_string={'warnings_reviewed':'1'})
         workbook=openpyxl.load_workbook(io.BytesIO(exported.data),data_only=True)
         sheet=workbook['Query result']
         self.assertIn(missing['loan_code'],[sheet.cell(row,2).value for row in range(2,sheet.max_row+1)])
         workbook.close()
+        material={**edited,'investment_amount':missing['allocated']-1}
+        changed=self.client.post('/api/note-allocations',json=material)
+        self.assertEqual(changed.status_code,200,changed.data)
+        self.assertTrue(changed.json['approval_reset'])
+        self.assertIn('investment_amount',changed.json['changed_fields'])
+        saved=next(row for row in self.client.get('/api/note-allocations').json if row['loan_code']==missing['loan_code'])
+        self.assertEqual(saved['approval_status'],'Draft')
+        versions=self.client.get('/api/note-allocations/'+missing['loan_code']+'/history').json
+        self.assertEqual(len(versions),5)
+        restored=self.client.post(f"/api/note-allocations/{missing['loan_code']}/history/{versions[1]['id']}/restore")
+        self.assertEqual(restored.status_code,200,restored.data)
+        self.assertEqual(restored.json['approval_status'],'Draft')
+        self.assertEqual(restored.json['investment_amount'],missing['allocated'])
+        versions=self.client.get('/api/note-allocations/'+missing['loan_code']+'/history').json
+        self.assertEqual(versions[0]['action'],'Restored')
+        self.assertEqual(len(versions),6)
         self.assertEqual(self.client.delete('/api/note-allocations/'+missing['loan_code']).status_code,200)
 
     def test_invalid_upload_does_not_replace_source(self):
@@ -174,7 +269,20 @@ class WebsiteTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/data').json['summary'],self.original_payload['summary'])
         versions=self.client.get('/api/source-versions/transactions').json
         self.assertTrue(any(row['current'] for row in versions))
+        current=next(row for row in versions if row['current'])
+        self.assertEqual(current['filename'],'transactions.xlsx')
         old=next(row for row in versions if row['object_key']==response.json['backup'])
+        before_key=current['object_key']
+        downloaded=self.client.get('/api/source-versions/transactions/download',
+                                   query_string={'object_key':old['object_key']})
+        self.assertEqual(downloaded.status_code,200,downloaded.data[:100])
+        self.assertEqual(downloaded.data,(self.seed/'transactions.xlsx').read_bytes())
+        self.assertEqual(next(row for row in self.client.get('/api/source-versions/transactions').json
+                              if row['current'])['object_key'],before_key)
+        self.assertEqual(self.client.get('/api/source-versions/simulation/download',
+            query_string={'object_key':old['object_key']}).status_code,404)
+        self.assertEqual(self.client.get('/api/source-versions/transactions/download',
+            query_string={'object_key':'sources/transactions/missing.xlsx'}).status_code,404)
         restored=self.client.post('/api/source-versions/transactions/restore',json={'object_key':old['object_key']})
         self.assertEqual(restored.status_code,200,restored.data)
         self.assertTrue(next(row for row in self.client.get('/api/source-versions/transactions').json
@@ -187,8 +295,55 @@ class WebsiteTests(unittest.TestCase):
         self.assertEqual(response.status_code,200,response.data)
         self.assertTrue(response.json['can_import'])
         self.assertGreater(response.json['stats']['successful'],0)
+        self.assertEqual(response.json['stats']['balance_breaks'],0)
+        self.assertEqual(response.json['stats']['movement_mismatches'],0)
+        self.assertGreater(response.json['stats']['excluded_cash_shadows'],0)
+        self.assertEqual(response.json['comparison']['added'],0)
+        self.assertEqual(response.json['comparison']['changed'],0)
+        self.assertEqual(response.json['comparison']['removed'],0)
+        self.assertEqual(response.json['comparison']['current_balance'],response.json['comparison']['candidate_balance'])
         after=self.client.get('/api/data').json
         self.assertEqual(after['summary'],before['summary'])
+
+        workbook=openpyxl.load_workbook(self.seed/'transactions.xlsx')
+        sheet=workbook[workbook.sheetnames[0]];headers=[cell.value for cell in sheet[2]]
+        current_column=headers.index('Current Balance(MYR)')+1
+        sheet.cell(4,current_column).value=float(sheet.cell(4,current_column).value)+10
+        broken=io.BytesIO();workbook.save(broken);workbook.close();payload=broken.getvalue()
+        rejected=self.client.post('/api/upload/validate/transactions',
+            data={'file':(io.BytesIO(payload),'broken-balances.xlsx')})
+        self.assertEqual(rejected.status_code,200,rejected.data)
+        self.assertFalse(rejected.json['can_import'])
+        messages=[item['message'] for item in rejected.json['issues']]
+        self.assertIn('Ledger balance is not continuous between transactions',messages)
+        self.assertIn('Transaction amount does not match its balance movement',messages)
+        self.assertGreaterEqual(rejected.json['comparison']['changed'],1)
+        direct=self.client.post('/api/upload/transactions',
+            data={'file':(io.BytesIO(payload),'broken-balances.xlsx')})
+        self.assertEqual(direct.status_code,422,direct.data)
+        self.assertEqual(self.client.get('/api/data').json['summary'],before['summary'])
+
+    def test_source_regression_requires_explicit_acknowledgement(self):
+        workbook=openpyxl.load_workbook(self.seed/'transactions.xlsx');sheet=workbook[workbook.sheetnames[0]]
+        headers=[cell.value for cell in sheet[2]];removed_id=str(sheet.cell(3,headers.index('ID')+1).value);sheet.delete_rows(3)
+        stream=io.BytesIO();workbook.save(stream);workbook.close();candidate=stream.getvalue()
+        preview=self.client.post('/api/upload/validate/transactions',
+            data={'file':(io.BytesIO(candidate),'older-ledger.xlsx')})
+        self.assertEqual(preview.status_code,200,preview.data)
+        self.assertTrue(preview.json['can_import'])
+        self.assertTrue(preview.json['comparison']['requires_acknowledgement'])
+        self.assertEqual(preview.json['comparison']['removed'],1)
+        self.assertIn(removed_id,preview.json['comparison']['removed_sample'])
+        blocked=self.client.post('/api/upload/transactions',
+            data={'file':(io.BytesIO(candidate),'older-ledger.xlsx')})
+        self.assertEqual(blocked.status_code,409,blocked.data)
+        accepted=self.client.post('/api/upload/transactions',
+            data={'allow_regression':'1','file':(io.BytesIO(candidate),'older-ledger.xlsx')})
+        self.assertEqual(accepted.status_code,200,accepted.data)
+        imported=[row for row in self.client.get('/api/data').json['transactions'] if str(row['id'])==removed_id]
+        self.assertEqual(imported,[])
+        event=next(row for row in self.client.get('/api/audit-events').json if row['action']=='Imported workbook')
+        self.assertTrue(event['details']['regression_acknowledged'])
 
     def test_reconciliation_exposes_note_level_differences(self):
         reconciliation=self.client.get('/api/data').json['reconciliation']
@@ -240,7 +395,8 @@ class WebsiteTests(unittest.TestCase):
         for column,value in enumerate(['Notes','Monthly','Gross/Nett','Tenure','Final Repayment Date','Pmt Type','Sept'],1):
             schedule.cell(4,column).value=value
         content=io.BytesIO();wb.save(content);wb.close();content.seek(0)
-        response=self.client.post('/api/upload/simulation',data={'as_of':'2026-09-15','file':(content,'expanded.xlsx')})
+        response=self.client.post('/api/upload/simulation',data={
+            'as_of':'2026-09-15','allow_regression':'1','file':(content,'expanded.xlsx')})
         self.assertEqual(response.status_code,200,response.data)
         row=self.client.get('/api/data').json['portfolio'][0]
         self.assertEqual(row['report_format'],'expanded-profit')

@@ -1,9 +1,16 @@
 async function accountStatement() {
   setTitle('Account Statement','Generate the MISB PDF account statement from your transaction log');
   const root=document.getElementById('content');
-  root.innerHTML=`<div class="grid2"><div class="panel"><h2>Upload transaction log</h2><p>Upload the Cofundr Excel log to update the ledger and prepare your statement.</p><form id="pdfStatementForm"><label class="datepick">Transaction log (.xlsx, up to 10 MB)<input id="pdfLedgerFile" type="file" accept=".xlsx"></label><label class="datepick mt">Include transactions through<input id="pdfCutoff" type="date" value="${DATA.summary.last_transaction_date||''}"><small>Leave blank to use the latest transaction date.</small></label><button id="pdfPreviewButton" class="primary mt" type="submit">Prepare statement</button></form><p id="pdfStatementError" role="alert" class="danger"></p></div><div class="panel"><h2>Same MISB statement format</h2><p><b>Investor 5490 · Amanahraya Trustees Berhad</b></p><p>Cofundr letterhead, expanded account summary and six-column transaction detail, using the supplied statement layout.</p><p>Each profit payout is shown as Gross Profit, Service Charge, SST where applicable, and Net Profit. Deposits and withdrawals use their approved Excel entries; duplicate requests are excluded and withdrawal fees remain separate.</p><p class="muted">Uploading here replaces the workspace transaction ledger. The previous workbook version remains saved in D1.</p></div></div><div id="pdfStatementPreview" class="panel mt"><p>Prepare the statement to review totals and download the PDF.</p></div>`;
+  root.innerHTML=`<div class="grid2"><div class="panel"><h2>Upload transaction log</h2><p>Upload the Cofundr Excel log to update the ledger and prepare your statement.</p><form id="pdfStatementForm"><label class="datepick">Transaction log (.xlsx, up to 10 MB)<input id="pdfLedgerFile" type="file" accept=".xlsx"></label><label class="datepick mt">Include transactions through<input id="pdfCutoff" type="date" value="${DATA.summary.last_transaction_date||''}"><small>Leave blank to use the latest transaction date.</small></label><button id="pdfPreviewButton" class="primary mt" type="submit">Prepare statement</button></form><p id="pdfStatementError" role="alert" class="danger"></p></div><div class="panel"><h2>Same MISB statement format</h2><p><b>Investor 5490 · Amanahraya Trustees Berhad</b></p><p>Cofundr letterhead, expanded account summary and six-column transaction detail, using the supplied statement layout.</p><p>Each profit payout is shown as Gross Profit, Service Charge, SST where applicable, and Net Profit. Deposits and withdrawals use their approved Excel entries; duplicate requests are excluded and withdrawal fees remain separate.</p><p class="muted">Uploading here replaces the workspace transaction ledger after quality and regression checks. The previous workbook version remains saved in D1.</p></div></div><div id="pdfStatementPreview" class="panel mt"><p>Prepare the statement to review totals and download the PDF.</p></div><div id="statementHistory" class="panel mt"><div class="empty">Loading statement history…</div></div>`;
   const form=root.querySelector('#pdfStatementForm'), file=root.querySelector('#pdfLedgerFile'), cutoff=root.querySelector('#pdfCutoff'), button=root.querySelector('#pdfPreviewButton'), error=root.querySelector('#pdfStatementError'), preview=root.querySelector('#pdfStatementPreview');
   let prepared=null;
+  const history=root.querySelector('#statementHistory');
+  async function loadHistory(){
+    try{
+      const response=await fetch('/api/account-statement-runs?limit=12'),runs=await response.json();
+      history.innerHTML=`<div class="panelhead"><div><h2>Generated statement history</h2><p>Each successful PDF generation records its cut-off and source workbook version in D1. Recreated PDFs use that exact immutable source without changing the live ledger.</p></div></div>${runs.length?`<div class="tablewrap compact"><table><thead><tr><th>Generated</th><th>Statement through</th><th class="num">Rows</th><th class="num">Pages</th><th class="num">Opening</th><th class="num">Closing</th><th class="num">Gross returns</th><th>Source</th><th></th></tr></thead><tbody>${runs.map(run=>`<tr><td>${esc(run.created_at)}</td><td><b>${dmy(run.as_of)}</b></td><td class="num">${run.row_count}</td><td class="num">${run.page_count}</td><td class="num">${RM(run.opening_balance)}</td><td class="num">${RM(run.closing_balance)}</td><td class="num">${RM(run.gross_returns)}</td><td><span class="muted">${esc(run.source_object_key.split('/').pop().slice(0,12))}…</span></td><td><a class="linkbtn" href="/api/account-statement-runs/${run.id}/pdf">Recreate PDF</a></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">No account-statement PDFs have been generated since history tracking was enabled.</p>'}`;
+    }catch(failure){history.innerHTML='<p class="danger">Could not load statement history.</p>'}
+  }
   const statementRM=value=>{
     if(value==='') return '';
     const amount=Number(value);
@@ -27,8 +34,10 @@ async function accountStatement() {
         const download=event.currentTarget;download.disabled=true;download.textContent='Generating PDF...';
         try {
           const response=await fetch('/api/export/account-statement.pdf?'+new URLSearchParams({as_of:prepared.as_of,version:prepared.version}));
+          if(!response.ok){let message='Could not generate the account statement.';try{message=(await response.json()).error||message}catch(parseError){}throw new Error(message)}
           const blob=await response.blob(),url=URL.createObjectURL(blob),link=document.createElement('a');
           link.href=url;link.download=`MISB_Account_Statement_${prepared.as_of}.pdf`;link.click();setTimeout(()=>URL.revokeObjectURL(url),10000);
+          await loadHistory();
         } catch(failure){error.textContent=failure.message;}
         finally{download.disabled=false;download.textContent='Download account statement PDF';}
       });
@@ -36,4 +45,5 @@ async function accountStatement() {
     } catch(failure){error.textContent=failure.message;}
     finally{button.disabled=false;}
   });
+  await loadHistory();
 }

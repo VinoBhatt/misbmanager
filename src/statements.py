@@ -243,7 +243,7 @@ def register_statement_routes(app):
     from flask import request, jsonify, send_file, g
     from storage import (read_source, source_rows, save_source, source_exists,
                          save_parsed_source, audit_event)
-    from uploads import validate_workbook
+    from uploads import inspect_workbook
 
     def build():
         if not source_exists('transactions'):
@@ -262,10 +262,19 @@ def register_statement_routes(app):
                 file=request.files.get('file')
                 if not file or not file.filename.lower().endswith('.xlsx'):
                     raise ValueError('Choose a transaction log in .xlsx format')
-                data=file.read();validate_workbook('transactions',data)
-                result=statement_data(data,request.form.get('as_of'))
-                save_source('transactions',data,result['latest_date'])
+                data=file.read()
                 from app import load_transactions
+                loaded=load_transactions() if source_exists('transactions') else []
+                current=list(getattr(g,'transactions_base',loaded))
+                quality=inspect_workbook('transactions',data,current)
+                if not quality.get('can_import'):
+                    return jsonify(error='The transaction workbook failed data-quality checks.',
+                                   issues=quality.get('issues',[])),422
+                if (quality.get('comparison') or {}).get('requires_acknowledgement'):
+                    return jsonify(error='This ledger is older or removes live transactions. Review and import it from Data Sources if that rollback is intentional.',
+                                   comparison=quality['comparison']),409
+                result=statement_data(data,request.form.get('as_of'))
+                save_source('transactions',data,result['latest_date'],file.filename)
                 g.pop('transactions_base',None);g.pop('transactions_effective',None)
                 load_transactions()
                 save_parsed_source('transactions',source_rows()['transactions']['object_key'],g.transactions_base)
@@ -285,7 +294,35 @@ def register_statement_routes(app):
         try:
             result=build()
             if result is None: return jsonify(error='The ledger has changed. Refresh the statement preview.'),409
+            filename=f'MISB_Account_Statement_{result["as_of"]}.pdf';pdf=statement_pdf(result)
+            from storage import save_statement_report_run
+            summary=result.get('summary',{})
+            save_statement_report_run(result['as_of'],result['version'],filename,{
+                'row_count':result.get('row_count',0),'page_count':result.get('page_count',0),
+                'opening_balance':summary.get('starting_balance',0),'closing_balance':summary.get('ending_balance',0),
+                'gross_returns':summary.get('total_gross_returns',0)})
+            audit_event('Generated account statement','report',result['as_of'],{
+                'filename':filename,'source_version':result['version'],'rows':result.get('row_count',0)})
+            return send_file(pdf,mimetype='application/pdf',as_attachment=True,download_name=filename)
+        except (ValueError,KeyError) as error:
+            return jsonify(error=str(error)),400
+
+    @app.get('/api/account-statement-runs')
+    def account_statement_history():
+        from storage import statement_report_runs
+        return jsonify(statement_report_runs(request.args.get('limit',20)))
+
+    @app.get('/api/account-statement-runs/<int:run_id>/pdf')
+    def reproduce_account_statement(run_id):
+        from storage import statement_report_run,read_source_version
+        run=statement_report_run(run_id)
+        if not run: return jsonify(error='That statement history record was not found.'),404
+        try:
+            source,_=read_source_version('transactions',run['source_object_key'])
+            result=statement_data(source.read(),run['as_of'])
+            audit_event('Recreated account statement','report',run['as_of'],{
+                'history_id':run_id,'filename':run['filename'],'source_version':run['source_object_key']})
             return send_file(statement_pdf(result),mimetype='application/pdf',as_attachment=True,
-                             download_name=f'MISB_Account_Statement_{result["as_of"]}.pdf')
+                             download_name=run['filename'])
         except (ValueError,KeyError) as error:
             return jsonify(error=str(error)),400

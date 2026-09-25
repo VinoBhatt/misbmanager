@@ -664,7 +664,11 @@ def build_payload():
     reconciliation=build_reconciliation(tx,pf)
     transaction_matching=build_transaction_matching(tx,pf)
     from allocations import allocation_map
-    approved_allocations=set(allocation_map(approved_only=True))
+    all_allocation_records=allocation_map()
+    approved_allocations={code for code,record in all_allocation_records.items()
+                          if record.get('approval_status') in ('Approved','Disbursed')}
+    allocation_workflow={status:sum(record.get('approval_status','Draft')==status for record in all_allocation_records.values())
+                         for status in ('Draft','Ready for Approval','Approved','Disbursed','Cancelled')}
     pending_allocations=[
         {'loan_code':row['loan_code'],'allocated':row['ledger_committed']}
         for row in reconciliation['rows']
@@ -681,6 +685,7 @@ def build_payload():
             'transactions':tx,'portfolio':pf,'schedule':schedule,'profit_schedule':profit_schedule,'due':due,'receivables':receivables,'issuers':issuers,
             'balance_breakdown':balance_breakdown,'action_totals':action_totals,'today':today,'cash_projection':projection,'cashflow_plan':cashflow_plan_rows(),
             'reconciliation':reconciliation,'transaction_matching':transaction_matching,'pending_allocations':pending_allocations,
+            'allocation_workflow':allocation_workflow,
             'projection_history':{'cutoff':projection_history.get('cutoff'),'event_count':len(projection_history.get('events',[]))}}
 
 
@@ -756,7 +761,7 @@ def delete_cashflow_plan(item_id):
 
 @app.route('/api/upload/<kind>', methods=['POST'])
 def upload(kind):
-    from uploads import validate_workbook
+    from uploads import inspect_workbook
     if kind not in ('transactions','simulation','projections'):
         return jsonify({'error':'Invalid file type'}),400
     f=request.files.get('file')
@@ -768,9 +773,23 @@ def upload(kind):
         return jsonify({'error':'As-of date must be YYYY-MM-DD'}),400
     parsed=None
     try:
-        validate_workbook(kind,data)
+        current=None
+        if kind=='transactions':
+            loaded=load_transactions();current=list(getattr(g,'transactions_base',loaded))
+        elif kind=='simulation':
+            current=list(load_simulation()[0])
+        quality=inspect_workbook(kind,data,current)
+        if not quality.get('can_import'):
+            return jsonify({'error':'Workbook failed data-quality checks. Validate it to review the issues.',
+                            'issues':quality.get('issues',[]),'stats':quality.get('stats',{})}),422
+        comparison=quality.get('comparison') or {};allow_regression=request.form.get('allow_regression') in ('1','true','yes')
+        if comparison.get('requires_acknowledgement') and not allow_regression:
+            return jsonify({'error':'This workbook would remove or roll back live source data. Review and acknowledge the regression before importing.',
+                            'comparison':comparison}),409
         # Parse only the candidate source before publishing it. The normalized
         # result is stored in D1 so ordinary dashboard requests never reopen XLSX.
+        for key in ('transactions_effective','transactions_base','simulation_parsed','simulation_display'):
+            g.pop(key,None)
         source_rows()
         g.sources[kind]={'kind':kind,'object_key':'candidate','as_of':as_of}
         if 'source_bytes' not in g: g.source_bytes={}
@@ -781,11 +800,12 @@ def upload(kind):
     finally:
         g.pop('sources',None)
         g.pop('source_bytes',None)
-    backup=save_source(kind,data,as_of)
+    backup=save_source(kind,data,as_of,f.filename)
     current=source_rows()[kind]
     save_parsed_source(kind,current['object_key'],parsed)
-    audit_event('Imported workbook','source',kind,{'as_of':as_of,'object_key':current['object_key'],'backup':backup or ''})
-    return jsonify({'ok':True,'backup':backup or 'First import; no previous version'})
+    audit_event('Imported workbook','source',kind,{'as_of':as_of,'object_key':current['object_key'],
+        'backup':backup or '','regression_acknowledged':bool((quality.get('comparison') or {}).get('requires_acknowledgement'))})
+    return jsonify({'ok':True,'backup':backup or 'First import; no previous version','validation':quality})
 
 
 @app.post('/api/upload/validate/<kind>')
@@ -797,7 +817,12 @@ def validate_upload(kind):
     if not f or not f.filename.lower().endswith('.xlsx'):
         return jsonify({'error':'Please upload an .xlsx file'}),400
     try:
-        return jsonify(inspect_workbook(kind,f.read()))
+        current=None
+        if kind=='transactions':
+            loaded=load_transactions();current=getattr(g,'transactions_base',loaded)
+        elif kind=='simulation':
+            current=load_simulation()[0]
+        return jsonify(inspect_workbook(kind,f.read(),current))
     except Exception as error:
         return jsonify({'error':str(error) or 'Workbook could not be validated.'}),400
 
@@ -807,6 +832,24 @@ def list_source_versions(kind):
     if kind not in ('transactions','simulation','projections'):
         return jsonify({'error':'Invalid source kind'}),400
     return jsonify(source_versions(kind))
+
+
+@app.get('/api/source-versions/<kind>/download')
+def download_source_version(kind):
+    if kind not in ('transactions','simulation','projections'):
+        return jsonify({'error':'Invalid source kind'}),400
+    from storage import read_source_version
+    from werkzeug.utils import secure_filename
+    object_key=str(request.args.get('object_key') or '')
+    try:
+        stream,version=read_source_version(kind,object_key)
+        fallback=f"{kind}_{version.get('as_of') or 'undated'}_{object_key.split('/')[-1][:8]}.xlsx"
+        filename=secure_filename(version.get('filename') or fallback) or fallback
+        if not filename.lower().endswith('.xlsx'): filename+='.xlsx'
+        return send_file(stream,mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                         as_attachment=True,download_name=filename)
+    except ValueError as error:
+        return jsonify({'error':str(error)}),404
 
 
 @app.post('/api/source-versions/<kind>/restore')
@@ -841,7 +884,46 @@ def rebuild_source_cache(kind):
     return jsonify({'ok':True,'kind':kind})
 
 
-def simulation_update_snapshot(as_of=None):
+SIMULATION_COMPARE_FIELDS=('Loan Status','Investment Amount','Paid Principal','Unpaid Principal',
+                           'Paid Profit','Unpaid Profit','Late Profit','SST')
+
+
+def compact_simulation_snapshot(headers, rows):
+    positions={name:headers.index(name) for name in ('Loan Code',)+SIMULATION_COMPARE_FIELDS if name in headers}
+    if 'Loan Code' not in positions: return {}
+    result={}
+    for row in rows:
+        if len(row)<=positions['Loan Code']: continue
+        code=normalize_note_code(row[positions['Loan Code']])
+        if not code: continue
+        result[code]={name:row[index] if index<len(row) else None for name,index in positions.items() if name!='Loan Code'}
+    return result
+
+
+def simulation_comparison(headers, rows, prior_id=None):
+    from storage import simulation_report_run,simulation_report_runs
+    if prior_id is not None:
+        prior=simulation_report_run(prior_id)
+    else:
+        history=simulation_report_runs(1);prior=history[0] if history else None
+    if not prior:
+        return {'has_prior':False,'requested_id':prior_id,'new_notes':[],'removed_notes':[],'changed_notes':[]}
+    before=prior.get('snapshot') or {};current=compact_simulation_snapshot(headers,rows)
+    new_notes=sorted(set(current)-set(before));removed_notes=sorted(set(before)-set(current));changed=[]
+    for code in sorted(set(current)&set(before)):
+        fields=[]
+        for field in SIMULATION_COMPARE_FIELDS:
+            old=before[code].get(field);new=current[code].get(field)
+            if isinstance(old,(int,float)) or isinstance(new,(int,float)):
+                if abs(num(old)-num(new))>.005: fields.append({'field':field,'before':old,'after':new})
+            elif old!=new: fields.append({'field':field,'before':old,'after':new})
+        if fields: changed.append({'loan_code':code,'fields':fields})
+    return {'has_prior':True,'prior_id':prior['id'],'prior_as_of':prior['as_of'],
+            'prior_created_at':prior['created_at'],'new_notes':new_notes,
+            'removed_notes':removed_notes,'changed_notes':changed}
+
+
+def simulation_update_snapshot(as_of=None, include_drafts=False, compare_to=None):
     """Build copy/export values from the current simulation template, updated from successful ledger transactions.
 
     Only transaction-driven servicing fields are changed. Descriptive fields, remarks, note names and other template content
@@ -924,7 +1006,7 @@ def simulation_update_snapshot(as_of=None):
     # load_simulation caches the displayed rows for this request, avoiding a
     # second OpenPyXL parse of the same workbook on CPU-limited Workers.
     displayed=g.simulation_display;headers=displayed['headers']
-    rows=[]; template_codes=set()
+    rows=[]; template_codes=set();ledger_updated_rows=[]
     for vals in displayed['rows']:
         arr=list(vals); code=normalize_note_code(arr[1]); template_codes.add(code)
         up=updates.get(code,{})
@@ -936,36 +1018,161 @@ def simulation_update_snapshot(as_of=None):
             elif isinstance(arr[i],(datetime,date)):
                 arr[i]=arr[i].strftime('%Y-%m-%d')
         rows.append(arr)
+        if any(num(up.get(field))>0 for field in ('Paid Principal','Paid Profit','Late Profit')):
+            ledger_updated_rows.append(arr)
     ledger_alloc={}
     for t in tx:
         if t.get('action')=='Investment Committed' and t.get('note'):
             ledger_alloc[t['note']]=ledger_alloc.get(t['note'],0)+num(t.get('amount'))
-    from allocations import allocation_map, row_values
+    from allocations import allocation_map, row_values, calculated_values
     all_saved_allocations=allocation_map()
     saved_allocations={code:record for code,record in all_saved_allocations.items()
-                       if record.get('approval_status') in ('Approved','Disbursed')}
-    added_entries=[]
+                       if record.get('approval_status') in ('Approved','Disbursed')
+                       or (include_drafts and record.get('approval_status') in ('Draft','Ready for Approval'))}
+    added_entries=[];draft_preview_entries=[];future_entries=[];new_entry_rows=[]
+    report_codes=set(template_codes)
     for code,record in sorted(saved_allocations.items()):
         if code in template_codes: continue
-        rows.append(row_values(headers,record,len(rows)+1));template_codes.add(code)
-        added_entries.append({'loan_code':code,'note_name':record.get('note_name',''),
-                              'issuer_name':record.get('issuer_name',''),
-                              'investment_amount':record.get('investment_amount',0),
-                              'approval_status':record.get('approval_status','Approved')})
-    missing=[{'loan_code':c,'allocated':a} for c,a in sorted(ledger_alloc.items()) if c not in template_codes]
+        approved=record.get('approval_status') in ('Approved','Disbursed')
+        entry_date=parse_date(record.get('allocation_date')) or parse_date(record.get('disbursal_date'))
+        if cutoff and entry_date and entry_date>cutoff:
+            if approved:
+                future_entries.append({'loan_code':code,'note_name':record.get('note_name',''),
+                                       'investment_amount':record.get('investment_amount',0),
+                                       'entry_date':entry_date.isoformat()})
+            continue
+        values=calculated_values(record)
+        synthetic={
+            'investment_amount':record.get('investment_amount',0),'final_date':values.get('Final Repayment Date '),
+            'net_profit':values.get('Net Profit',0),'gross_profit':values.get('Gross Profit',0),
+            'gross_profit_earned':values.get('Gross Profit Earned',0),'service_fee':values.get('Service Fee ',0),
+            'late_profit':0,'loan_status':record.get('status','Active'),'installment':values.get('Installment',''),
+            'early_repayment':'','early_date':None,
+            'report_format':'expanded-profit' if 'Total Gross Profit' in headers else 'legacy'
+        }
+        # Reuse the same servicing calculation as historical rows by calculating
+        # this entry against its ledger activity before it is appended.
+        note_tx=[t for t in tx if t.get('note')==code]
+        inv=max(0,num(synthetic['investment_amount']))
+        paid_principal=sum(num(t.get('amount')) for t in note_tx if t.get('action')=='Principal Payout')
+        profit_tx=[t for t in note_tx if t.get('action')=='Profit Payout']
+        tawidh=sum(num(t.get('amount')) for t in profit_tx if 'tawidh' in str(t.get('transaction_no') or '').lower() or "ta'widh" in str(t.get('transaction_no') or '').lower())
+        expanded=synthetic['report_format']=='expanded-profit'
+        all_profit=sum(num(t.get('amount')) for t in profit_tx);paid_profit=all_profit if expanded else all_profit-tawidh
+        from statements import profit_components
+        sst=sum(float(profit_components(t.get('amount'),parse_date(t.get('date')))[2]) for t in profit_tx if parse_date(t.get('date')))
+        principal_events=sorted((parse_date(t.get('date')),num(t.get('amount'))) for t in note_tx if t.get('action')=='Principal Payout' and parse_date(t.get('date')))
+        running=0.0;settlement=None;tol=max(1.0,inv*.00001)
+        for paid_on,amount in principal_events:
+            running+=amount
+            if inv and running>=inv-tol: settlement=paid_on;break
+        completed=bool(inv and paid_principal>=inv-tol);final=parse_date(synthetic['final_date']);early=bool(completed and settlement and final and settlement<final)
+        original_gross=max(0,num(synthetic['gross_profit']));original_net=max(0,num(synthetic['net_profit']))
+        if completed and expanded:
+            expected_net=paid_profit;gross_profit=(expected_net+sst)/.8 if expected_net or sst else 0
+            gross_earned=gross_profit if early else max(0,num(synthetic['gross_profit_earned']))
+            late_charge=0 if early else max(0,gross_profit-gross_earned);service_fee=max(0,gross_profit*.2);unpaid_profit=0
+        elif completed:
+            expected_net=paid_profit;gross_profit=expected_net/.8 if expected_net else original_gross
+            gross_earned=max(0,num(synthetic['gross_profit_earned']));late_charge=0;service_fee=max(0,gross_profit-expected_net);unpaid_profit=0
+        else:
+            gross_profit=original_gross;gross_earned=max(0,num(synthetic['gross_profit_earned']));late_charge=0
+            service_fee=max(0,num(synthetic['service_fee']));expected_net=max(0,gross_profit-service_fee-sst) if expanded else original_net
+            unpaid_profit=max(0,expected_net-paid_profit)
+        updates[code]={'_expanded':expanded,'Loan Status':'Completed' if completed else synthetic['loan_status'],
+            'Actual Repayment **':paid_principal+paid_profit,'Paid Principal':paid_principal,'Unpaid Principal':max(0,inv-paid_principal),
+            'Gross Profit':gross_profit,'Gross Profit Earned':gross_earned,'Total Gross Profit':gross_profit,
+            'Net Profit':expected_net,'Paid Profit':paid_profit,'Unpaid Profit':unpaid_profit,'Late Profit':tawidh,
+            'Late Payment Charges':late_charge,'Service Fee ':service_fee,'SST':sst,
+            'Early Repayment':'Early Repayment of Principal' if early else '',
+            'Early Repayment Date':settlement.isoformat() if early and settlement else None}
+        arr=row_values(headers,record,len(rows)+1)
+        for index,header in enumerate(headers):
+            if header in updates[code]: arr[index]=updates[code][header]
+        rows.append(arr);new_entry_rows.append(arr);template_codes.add(code)
+        entry_summary={'loan_code':code,'note_name':record.get('note_name',''),
+                       'issuer_name':record.get('issuer_name',''),'investment_amount':record.get('investment_amount',0),
+                       'approval_status':record.get('approval_status','Draft'),
+                       'paid_principal':paid_principal,'paid_profit':paid_profit}
+        if approved:
+            added_entries.append(entry_summary);report_codes.add(code)
+        else: draft_preview_entries.append(entry_summary)
+    missing=[{'loan_code':c,'allocated':a} for c,a in sorted(ledger_alloc.items()) if c not in report_codes]
     pending_entries=[{'loan_code':code,'note_name':record.get('note_name',''),
                       'investment_amount':record.get('investment_amount',0),
                       'approval_status':record.get('approval_status','Draft')}
                      for code,record in sorted(all_saved_allocations.items())
                      if record.get('approval_status') not in ('Approved','Disbursed','Cancelled')]
-    return {'headers':headers,'rows':rows,'updates':updates,'missing_notes':missing,
+    positions={header:headers.index(header) for header in ('Loan Code','Issuer Name','Investment Amount','Paid Principal','Unpaid Principal','Paid Profit','Unpaid Profit','SST') if header in headers}
+    def total(field):
+        index=positions.get(field)
+        return sum(num(row[index]) for row in rows if index is not None and index<len(row))
+    report_totals={field:total(field) for field in ('Investment Amount','Paid Principal','Unpaid Principal','Paid Profit','Unpaid Profit','SST')}
+    report_totals['new_allocation']=sum(num(item.get('investment_amount')) for item in added_entries)
+    issues=[]
+    if 'Loan Code' not in positions:
+        issues.append({'level':'error','code':'missing-loan-code','message':'The report template does not contain a Loan Code column.'})
+    else:
+        code_counts={}
+        for row in rows:
+            code=normalize_note_code(row[positions['Loan Code']]) if positions['Loan Code']<len(row) else ''
+            if code: code_counts[code]=code_counts.get(code,0)+1
+        for code,count in code_counts.items():
+            if count>1: issues.append({'level':'error','code':'duplicate-note','loan_code':code,'message':f'{code} appears {count} times in the report.'})
+        investment_index=positions.get('Investment Amount');paid_principal_index=positions.get('Paid Principal')
+        if investment_index is not None and paid_principal_index is not None:
+            for row in rows:
+                code=normalize_note_code(row[positions['Loan Code']]) if positions['Loan Code']<len(row) else ''
+                investment=num(row[investment_index]) if investment_index<len(row) else 0
+                paid_principal=num(row[paid_principal_index]) if paid_principal_index<len(row) else 0
+                if code and paid_principal>investment+.01:
+                    issues.append({'level':'error','code':'principal-overpayment','loan_code':code,
+                                   'message':f'{code} principal payouts of RM {paid_principal:,.2f} exceed its RM {investment:,.2f} investment.'})
+    for entry in added_entries:
+        code=entry['loan_code'];investment=num(entry.get('investment_amount'));committed=num(ledger_alloc.get(code))
+        if committed and abs(committed-investment)>.01:
+            issues.append({'level':'warning','code':'ledger-allocation-mismatch','loan_code':code,
+                           'message':f'{code} campaign allocation is RM {investment:,.2f}; the ledger records RM {committed:,.2f}.'})
+        elif not committed:
+            issues.append({'level':'warning','code':'ledger-allocation-missing','loan_code':code,
+                           'message':f'{code} has no successful Investment Committed transaction through this cut-off.'})
+    issuer_limit=num(get_settings().get('issuer_limit'));issuer_exposure={}
+    issuer_index=positions.get('Issuer Name');outstanding_index=positions.get('Unpaid Principal');investment_index=positions.get('Investment Amount')
+    if issuer_index is not None:
+        for row in rows:
+            issuer=str(row[issuer_index] if issuer_index<len(row) else '').strip() or 'Unknown Issuer'
+            value=num(row[outstanding_index]) if outstanding_index is not None and outstanding_index<len(row) else (num(row[investment_index]) if investment_index is not None and investment_index<len(row) else 0)
+            issuer_exposure[issuer]=issuer_exposure.get(issuer,0)+max(0,value)
+        for issuer,exposure in issuer_exposure.items():
+            if issuer_limit and exposure>issuer_limit+.01:
+                issues.append({'level':'warning','code':'issuer-limit','issuer':issuer,
+                               'message':f'{issuer} exposure is RM {exposure:,.2f}, above the RM {issuer_limit:,.2f} issuer limit.'})
+    uncommitted=sum(num(entry.get('investment_amount')) for entry in added_entries if not num(ledger_alloc.get(entry['loan_code'])))
+    latest_tx=max(tx,key=lambda row:(str(row.get('date') or ''),int(row.get('id') or 0)),default=None);available_cash=num(latest_tx.get('current_balance')) if latest_tx else 0
+    if uncommitted>available_cash+.01:
+        issues.append({'level':'warning','code':'cash-headroom',
+                       'message':f'Uncommitted new allocations total RM {uncommitted:,.2f}, above the RM {available_cash:,.2f} ledger cash balance.'})
+    if missing:
+        issues.append({'level':'warning','code':'missing-campaign-details',
+                       'message':f'{len(missing)} ledger allocation(s) still need approved campaign particulars.'})
+    validation={'can_generate':not any(item['level']=='error' for item in issues),
+                'error_count':sum(item['level']=='error' for item in issues),
+                'warning_count':sum(item['level']=='warning' for item in issues),'issues':issues}
+    result={'headers':headers,'rows':rows,'updates':updates,'missing_notes':missing,
             'baseline_row_count':len(displayed['rows']),'added_entries':added_entries,
-            'pending_entries':pending_entries,
+            'draft_preview_entries':draft_preview_entries,'pending_entries':pending_entries,
+            'future_entries':future_entries,'new_entry_rows':new_entry_rows,
+            'ledger_updated_rows':ledger_updated_rows,'include_drafts':bool(include_drafts),
+            'report_totals':report_totals,'validation':validation,
+            'capacity':{'issuer_limit':issuer_limit,'issuer_exposure':issuer_exposure,
+                        'available_cash':available_cash,'uncommitted_new_allocations':uncommitted},
             'as_of':as_of or (max([t.get('date') for t in tx if t.get('date')],default=''))}
+    result['comparison']=None if include_drafts else simulation_comparison(headers,rows,compare_to)
+    return result
 
 
-def build_updated_simulation_workbook(as_of=None):
-    snap=simulation_update_snapshot(as_of)
+def build_updated_simulation_workbook(as_of=None, snap=None):
+    snap=snap or simulation_update_snapshot(as_of)
     wb=openpyxl.load_workbook(read_source('simulation'),data_only=False)
     ws=wb['Query result'] if 'Query result' in wb.sheetnames else wb[wb.sheetnames[0]]
     headers=[c.value for c in ws[1]]
@@ -1004,8 +1211,10 @@ def build_updated_simulation_workbook(as_of=None):
             ws.cell(row,hidx['Net Profit']).value=f'={openpyxl.utils.get_column_letter(hidx["Total Gross Profit"])}{row}-{openpyxl.utils.get_column_letter(hidx["Service Fee "])}{row}-{openpyxl.utils.get_column_letter(hidx["SST"])}{row}'
     from allocations import allocation_map, row_values
     existing={normalize_note_code(ws.cell(row,2).value) for row in range(2,ws.max_row+1)}
+    included_codes={item['loan_code'] for item in snap.get('added_entries',[])}
+    preview_rows={normalize_note_code(row[1]):row for row in snap.get('new_entry_rows',[]) if len(row)>1}
     for code,record in sorted(allocation_map(approved_only=True).items()):
-        if code in existing: continue
+        if code in existing or code not in included_codes: continue
         target=ws.max_row+1; source=max(2,target-1)
         for column in range(1,len(headers)+1):
             original=ws.cell(source,column); cell=ws.cell(target,column)
@@ -1014,7 +1223,9 @@ def build_updated_simulation_workbook(as_of=None):
             if original.number_format: cell.number_format=original.number_format
             if original.alignment: cell.alignment=copy(original.alignment)
             if original.protection: cell.protection=copy(original.protection)
-        for column,value in enumerate(row_values(headers,record,target-1),1):
+        report_values=preview_rows.get(code) or row_values(headers,record,target-1)
+        if report_values: report_values[0]=target-1
+        for column,value in enumerate(report_values,1):
             ws.cell(target,column).value=value
         existing.add(code)
     # Keep every sheet, comment/note, style, column width and existing Remarks cell from the imported template.
@@ -1027,15 +1238,46 @@ def build_updated_simulation_workbook(as_of=None):
 @app.route('/api/simulation-preview')
 def simulation_preview():
     as_of=request.args.get('as_of') or None
-    return jsonify(simulation_update_snapshot(as_of))
+    include_drafts=request.args.get('include_drafts') in ('1','true','yes')
+    compare_to=request.args.get('compare_to') or None
+    if compare_to is not None:
+        try: compare_to=int(compare_to)
+        except (TypeError,ValueError): return jsonify({'error':'The comparison report ID is invalid.'}),400
+    return jsonify(simulation_update_snapshot(as_of,include_drafts,compare_to))
 
 @app.route('/api/export/updated-simulation.xlsx')
 def export_updated_simulation():
     as_of=request.args.get('as_of') or None
-    wb,snap=build_updated_simulation_workbook(as_of)
+    snap=simulation_update_snapshot(as_of)
+    if not snap.get('validation',{}).get('can_generate',True):
+        return jsonify({'error':'Resolve the blocking simulation validation errors before generating the report.',
+                        'validation':snap['validation']}),422
+    warning_count=int(snap.get('validation',{}).get('warning_count',0))
+    warnings_reviewed=request.args.get('warnings_reviewed') in ('1','true','yes')
+    if warning_count and not warnings_reviewed:
+        return jsonify({'error':'Review and acknowledge the simulation warnings before generating the report.',
+                        'validation':snap['validation']}),409
+    wb,snap=build_updated_simulation_workbook(as_of,snap)
     b=io.BytesIO(); wb.save(b); b.seek(0)
-    stamp=(as_of or snap.get('as_of') or date.today().isoformat())
-    return send_file(b,mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',as_attachment=True,download_name=f'Simulation_Report_MISB_Updated_{stamp}.xlsx')
+    stamp=(as_of or snap.get('as_of') or date.today().isoformat());filename=f'Simulation_Report_MISB_Updated_{stamp}.xlsx'
+    from storage import save_simulation_report_run
+    save_simulation_report_run(stamp,filename,{
+        'baseline_rows':snap.get('baseline_row_count',0),'new_rows':len(snap.get('added_entries',[])),
+        'ledger_updated_rows':len(snap.get('ledger_updated_rows',[])),'total_rows':len(snap.get('rows',[])),
+        'missing_allocations':len(snap.get('missing_notes',[]))
+    },compact_simulation_snapshot(snap.get('headers',[]),snap.get('rows',[])))
+    audit_event('Generated simulation report','report',stamp,{
+        'filename':filename,'rows':len(snap.get('rows',[])),
+        'warning_count':warning_count,'warnings_reviewed':warnings_reviewed})
+    return send_file(b,mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',as_attachment=True,download_name=filename)
+
+
+@app.get('/api/simulation-report-runs')
+def simulation_report_history():
+    from storage import simulation_report_runs
+    rows=simulation_report_runs(request.args.get('limit',20))
+    for row in rows: row.pop('snapshot',None)
+    return jsonify(rows)
 
 def report_workbook(p, as_of):
     wb=openpyxl.Workbook(); ws=wb.active; ws.title='Fund Summary'

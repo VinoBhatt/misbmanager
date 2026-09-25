@@ -47,5 +47,15 @@ class AllocationTests(unittest.TestCase):
         self.assertEqual(result['profit_rate_pa'],15.6)
         self.assertEqual(result['tenor_type'],'Days')
 
+    def test_allocation_cannot_exceed_financing_amount(self):
+        with self.assertRaisesRegex(ValueError,'cannot exceed'):
+            clean_record({
+                'loan_code':'IIF-9999','company_id':1,'issuer_name':'Issuer','note_name':'Note',
+                'product_type':'Islamic Invoice Financing (IIF) - Receivables','business_description':'Business',
+                'investment_amount':101,'loan_note_size':100,'allocation_date':'2026-09-25',
+                'disbursal_date':'2026-09-26','payment_type':'Bullet','term':90,
+                'tenor_type':'Days','gross_pa':10
+            })
+
 
 if __name__=='__main__': unittest.main()

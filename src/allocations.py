@@ -67,6 +67,8 @@ def clean_record(data):
     record['company_id']=int(number(data.get('company_id'),'Company ID',1))
     record['investment_amount']=number(data.get('investment_amount'),'MISB allocation',0.01)
     record['loan_note_size']=number(data.get('loan_note_size'),'Financing amount',0.01)
+    if record['investment_amount'] > record['loan_note_size']:
+        raise ValueError('MISB allocation cannot exceed the financing amount')
     record['term']=int(number(data.get('term'),'Note tenure',1))
     record['gross_pa']=number(data.get('gross_pa'),'Profit rate',0)
     # The UI submits percentages (15.60); the simulation stores decimal rates (0.156).
@@ -146,6 +148,32 @@ def save_allocation(record):
         con.commit()
     finally:
         con.close()
+
+
+def save_allocation_version(record, action, changed_fields=()):
+    con=connect()
+    try:
+        con.execute('''INSERT INTO note_allocation_versions(loan_code,action,changed_fields,snapshot)
+            VALUES(?,?,?,?)''',(record['loan_code'],action,json.dumps(list(changed_fields),separators=(',',':')),
+                               json.dumps(record,separators=(',',':'))))
+        con.commit()
+    finally:
+        con.close()
+
+
+def allocation_versions(loan_code, limit=50):
+    code=normalize_code(loan_code);con=connect()
+    try:
+        rows=[dict(row) for row in con.execute('''SELECT id,loan_code,action,changed_fields,snapshot,created_at
+            FROM note_allocation_versions WHERE loan_code=? ORDER BY id DESC LIMIT ?''',(code,max(1,min(int(limit),100))))]
+    finally:
+        con.close()
+    for row in rows:
+        try: row['changed_fields']=json.loads(row.get('changed_fields') or '[]')
+        except (TypeError,json.JSONDecodeError): row['changed_fields']=[]
+        try: row['snapshot']=json.loads(row.get('snapshot') or '{}')
+        except (TypeError,json.JSONDecodeError): row['snapshot']={}
+    return rows
 
 
 def parse_ai_json(answer):
@@ -284,13 +312,85 @@ def register_allocation_routes(app):
     def note_allocations():
         if request.method=='GET': return jsonify(allocations())
         try:
-            record=clean_record(request.get_json() or {});save_allocation(record)
-            audit_event('Saved allocation','allocation',record['loan_code'],{'amount':record['investment_amount']})
-            return jsonify(record)
+            record=clean_record(request.get_json() or {})
+            existing=allocation_map()
+            from app import load_simulation, load_transactions, num, get_settings, is_active
+            portfolio,_=load_simulation()
+            if record['loan_code'] not in existing and record['loan_code'] in {row.get('loan_code') for row in portfolio}:
+                return jsonify(error=f"{record['loan_code']} already exists in the historical simulation baseline."),409
+            warnings=[]
+            ledger_amount=sum(num(row.get('amount')) for row in load_transactions()
+                              if str(row.get('status')).upper()=='SUCCESSFUL'
+                              and row.get('action')=='Investment Committed'
+                              and row.get('note')==record['loan_code'])
+            if ledger_amount and abs(ledger_amount-record['investment_amount'])>.01:
+                warnings.append(f"The campaign allocation is RM {record['investment_amount']:,.2f}, but the ledger records RM {ledger_amount:,.2f}.")
+            issuer_key=record['issuer_name'].strip().casefold()
+            baseline_exposure=sum(max(0,num(row.get('unpaid_principal'))) for row in portfolio
+                                  if is_active(row) and str(row.get('issuer') or '').strip().casefold()==issuer_key)
+            saved_exposure=sum(max(0,num(row.get('investment_amount'))) for code,row in existing.items()
+                               if code!=record['loan_code'] and row.get('approval_status') in ('Approved','Disbursed')
+                               and str(row.get('issuer_name') or '').strip().casefold()==issuer_key)
+            issuer_limit=num(get_settings().get('issuer_limit'));projected_exposure=baseline_exposure+saved_exposure+record['investment_amount']
+            if issuer_limit and projected_exposure>issuer_limit+.01:
+                warnings.append(f"Projected exposure for {record['issuer_name']} is RM {projected_exposure:,.2f}, above the RM {issuer_limit:,.2f} issuer limit.")
+            successful=[row for row in load_transactions() if str(row.get('status')).upper()=='SUCCESSFUL']
+            latest=max(successful,key=lambda row:(str(row.get('date') or ''),int(row.get('id') or 0)),default=None)
+            cash=num(latest.get('current_balance')) if latest else 0
+            if not ledger_amount and record['investment_amount']>cash+.01:
+                warnings.append(f"The RM {record['investment_amount']:,.2f} allocation exceeds the current RM {cash:,.2f} ledger cash balance.")
+            previous=existing.get(record['loan_code']);changed_fields=[]
+            if previous:
+                changed_fields=[field for field in FIELDS if previous.get(field)!=record.get(field)]
+            material_fields=set(FIELDS)-{'remarks'}
+            approval_reset=bool(previous and previous.get('approval_status') in ('Approved','Disbursed')
+                                and material_fields.intersection(changed_fields))
+            save_allocation(record)
+            approval_status=previous.get('approval_status','Draft') if previous else 'Draft'
+            if approval_reset:
+                con=connect()
+                try:
+                    con.execute("UPDATE note_allocations SET approval_status='Draft',approval_updated_at=CURRENT_TIMESTAMP WHERE loan_code=?",(record['loan_code'],));con.commit()
+                finally: con.close()
+                approval_status='Draft';warnings.append('Material details changed, so approval was reset to Draft.')
+            version={**record,'approval_status':approval_status}
+            save_allocation_version(version,'Updated' if previous else 'Created',changed_fields)
+            audit_event('Updated allocation' if previous else 'Saved allocation','allocation',record['loan_code'],
+                        {'amount':record['investment_amount'],'changed_fields':changed_fields,'approval_reset':approval_reset})
+            return jsonify({**record,'approval_status':approval_status,'approval_reset':approval_reset,
+                            'changed_fields':changed_fields,'warnings':warnings})
         except ValueError as error:
             return jsonify(error=str(error)),400
 
-    @app.delete('/api/note-allocations/<path:loan_code>')
+    @app.get('/api/note-allocations/<loan_code>/history')
+    def note_allocation_history(loan_code):
+        try: return jsonify(allocation_versions(loan_code,request.args.get('limit',50)))
+        except ValueError as error: return jsonify(error=str(error)),400
+
+    @app.post('/api/note-allocations/<loan_code>/history/<int:version_id>/restore')
+    def restore_note_allocation_version(loan_code, version_id):
+        try:
+            code=normalize_code(loan_code);con=connect()
+            try: matches=list(con.execute('SELECT snapshot FROM note_allocation_versions WHERE id=? AND loan_code=?',(version_id,code)))
+            finally: con.close()
+            if not matches: return jsonify(error='That campaign-entry version was not found.'),404
+            snapshot=json.loads(matches[0]['snapshot']);record=clean_record(snapshot)
+            from app import load_simulation
+            portfolio,_=load_simulation()
+            if code in {row.get('loan_code') for row in portfolio}:
+                return jsonify(error=f'{code} now exists in the historical simulation baseline and cannot be restored as a new entry.'),409
+            current=allocation_map().get(code) or {};changed_fields=[field for field in FIELDS if current.get(field)!=record.get(field)]
+            save_allocation(record);con=connect()
+            try:
+                con.execute("UPDATE note_allocations SET approval_status='Draft',approval_updated_at=CURRENT_TIMESTAMP WHERE loan_code=?",(code,));con.commit()
+            finally: con.close()
+            restored={**record,'approval_status':'Draft'};save_allocation_version(restored,'Restored',changed_fields)
+            audit_event('Restored allocation version','allocation',code,{'version_id':version_id,'changed_fields':changed_fields})
+            return jsonify({**restored,'restored_version_id':version_id,'changed_fields':changed_fields})
+        except (ValueError,json.JSONDecodeError) as error:
+            return jsonify(error=str(error) or 'The saved version could not be restored.'),400
+
+    @app.delete('/api/note-allocations/<loan_code>')
     def delete_note_allocation(loan_code):
         code=normalize_code(loan_code);con=connect()
         try: con.execute('DELETE FROM note_allocations WHERE loan_code=?',(code,));con.commit()
@@ -298,7 +398,7 @@ def register_allocation_routes(app):
         audit_event('Deleted allocation','allocation',code)
         return jsonify(ok=True)
 
-    @app.patch('/api/note-allocations/<path:loan_code>/approval')
+    @app.patch('/api/note-allocations/<loan_code>/approval')
     def update_allocation_approval(loan_code):
         code=normalize_code(loan_code);target=str((request.get_json() or {}).get('status') or '')
         transitions={
@@ -320,6 +420,8 @@ def register_allocation_routes(app):
             con.commit()
         finally:
             con.close()
+        current_record=allocation_map().get(code)
+        if current_record: save_allocation_version(current_record,'Approval changed',['approval_status'])
         audit_event('Changed approval status','allocation',code,{'from':current,'to':target})
         return jsonify(ok=True,loan_code=code,approval_status=target)
 
