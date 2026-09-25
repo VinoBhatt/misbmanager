@@ -99,6 +99,11 @@ class WebsiteTests(unittest.TestCase):
     def test_new_note_allocation_feeds_simulation_copy(self):
         snapshot=self.client.get('/api/simulation-preview').json
         missing=snapshot['missing_notes'][0]
+        self.assertEqual(snapshot['baseline_row_count'],len(snapshot['rows']))
+        self.assertEqual(snapshot['added_entries'],[])
+        pending=self.client.get('/api/data').json['pending_allocations']
+        self.assertIn(missing['loan_code'],[item['loan_code'] for item in pending])
+        self.assertEqual(next(item['allocated'] for item in pending if item['loan_code']==missing['loan_code']),missing['allocated'])
         payload={
             'loan_code':missing['loan_code'],'company_id':6001,'issuer_name':'Example Manufacturing Sdn Bhd',
             'note_name':'Precision Tools Manufacturer 11','product_type':'Islamic Invoice Financing (IIF) - Receivables',
@@ -113,10 +118,14 @@ class WebsiteTests(unittest.TestCase):
         self.assertEqual(response.json['gross_pa'],.156)
         draft=self.client.get('/api/simulation-preview').json
         self.assertIn(missing['loan_code'],[item['loan_code'] for item in draft['missing_notes']])
+        self.assertIn(missing['loan_code'],[item['loan_code'] for item in draft['pending_entries']])
+        self.assertEqual(len(draft['rows']),draft['baseline_row_count'])
+        self.assertIn(missing['loan_code'],[item['loan_code'] for item in self.client.get('/api/data').json['pending_allocations']])
         response=self.client.patch('/api/note-allocations/'+missing['loan_code']+'/approval',json={'status':'Ready for Approval'})
         self.assertEqual(response.status_code,200,response.data)
         response=self.client.patch('/api/note-allocations/'+missing['loan_code']+'/approval',json={'status':'Approved'})
         self.assertEqual(response.status_code,200,response.data)
+        self.assertNotIn(missing['loan_code'],[item['loan_code'] for item in self.client.get('/api/data').json['pending_allocations']])
         email=self.client.get('/api/allocation-email-preview',query_string={
             'loan_code':missing['loan_code'],'request_date':'2026-09-17','period_end':'2026-09-30',
             'additional_amount':'7000000','additional_date':'2026-09-01',
@@ -139,6 +148,8 @@ class WebsiteTests(unittest.TestCase):
             self.assertEqual(automatic.json['additional_amount'],sum(row['amount'] for row in eligible if row['date']==latest))
         refreshed=self.client.get('/api/simulation-preview').json
         self.assertNotIn(missing['loan_code'],[item['loan_code'] for item in refreshed['missing_notes']])
+        self.assertIn(missing['loan_code'],[item['loan_code'] for item in refreshed['added_entries']])
+        self.assertEqual(len(refreshed['rows']),refreshed['baseline_row_count']+1)
         index=refreshed['headers'].index('Loan Code')
         self.assertIn(missing['loan_code'],[row[index] for row in refreshed['rows']])
         exported=self.client.get('/api/export/updated-simulation.xlsx')

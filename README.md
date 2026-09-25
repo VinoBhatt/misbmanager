@@ -165,7 +165,7 @@ Every imported source workbook remains an immutable D1 version. **Workbook histo
 
 Open **New Note Allocation** and upload a PNG, JPEG or WebP screenshot of the Cofundr note card. **Read screenshot** prefills the note name, reference number, note type, risk rating, financing amount, outstanding amount, profit rate, tenure, campaign dates and status. Review those values and complete the issuer name, company ID, business description, MISB allocation, payment type and disbursal date.
 
-Saving normalizes a Cofundr reference such as `IIF2113-17092026` to the simulation loan code `IIF-2113`, calculates exposure, repayment date, expected repayment, gross and net profit, and service fee, and stores the record in D1. Approved notes are appended to the next **Simulation Copy** preview and Excel export; a matching ledger allocation is then treated as resolved. The screenshot itself is not stored, and R2 is not used.
+Saving normalizes a Cofundr reference such as `IIF2113-17092026` to the simulation loan code `IIF-2113`, calculates exposure, repayment date, expected repayment, gross and net profit, and service fee, and stores the record in D1. The uploaded simulation workbook is the historical baseline. Approved campaign entries are appended as new rows in the next **Simulation Generator** preview and Excel export, while matching ledger transactions validate allocations and update repayments. The screenshot itself is not stored, and R2 is not used.
 
 New allocations follow `Draft → Ready for Approval → Approved → Disbursed`. Only Approved and Disbursed records can enter Simulation Copy or the allocation email. A record can be cancelled or returned for correction through the permitted workflow transitions.
 

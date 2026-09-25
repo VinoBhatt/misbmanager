@@ -32,7 +32,7 @@ test('new note allocation is saved for Simulation Copy',async({page})=>{
   await page.locator('[name="campaign_end"]').fill('2026-09-24');
   await page.locator('[name="business_description"]').fill('Precision component manufacturing and invoice financing.');
   await page.getByRole('button',{name:'Save allocation'}).click();
-  await expect(page.locator('#allocationMessage')).toContainText('IIF-9999 is ready');
+  await expect(page.locator('#allocationMessage')).toContainText('IIF-9999 was saved as a new simulation entry');
   await expect(page.locator('#allocationSaved')).toContainText('Precision Tools Manufacturer 11');
   let workflow=page.locator('.update-approval[data-code="IIF-9999"]');
   await workflow.locator('xpath=..').getByLabel('Next approval status').selectOption('Ready for Approval');
@@ -51,6 +51,23 @@ test('new note allocation is saved for Simulation Copy',async({page})=>{
   await page.locator('.nav[data-view="allocation"]').click();
   await page.locator('.delete-allocation[data-code="IIF-9999"]').click();
   await expect(page.locator('#allocationSaved')).not.toContainText('Precision Tools Manufacturer 11');
+});
+
+test('missing simulation allocation opens the campaign generator prefilled',async({page})=>{
+  await page.goto('/');
+  await expect(page.locator('#content .kpis').first()).toBeVisible();
+  await page.locator('.nav[data-view="simcopy"]').click();
+  await expect(page.getByRole('heading',{name:'Simulation Report Generator'})).toBeVisible();
+  await expect(page.locator('#simCopyStatus')).toContainText('Historical baseline');
+  const card=page.locator('.missing-note-card').first();
+  await expect(card).toBeVisible();
+  const code=await card.getAttribute('data-code');
+  const amount=await card.getAttribute('data-amount');
+  await card.click();
+  await expect(page.locator('[name="loan_code"]')).toHaveValue(code);
+  await expect(page.locator('[name="investment_amount"]')).toHaveValue(amount);
+  await expect(page.locator('#allocationMessage')).toContainText('pre-filled');
+  await expect(page.getByRole('heading',{name:'1. Read campaign picture'})).toBeVisible();
 });
 
 test('statement upload produces a downloadable PDF',async({page})=>{

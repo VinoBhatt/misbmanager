@@ -663,6 +663,15 @@ def build_payload():
     projection=build_cash_projection(latest_cash,last_tx_date,pay_schedule)
     reconciliation=build_reconciliation(tx,pf)
     transaction_matching=build_transaction_matching(tx,pf)
+    from allocations import allocation_map
+    approved_allocations=set(allocation_map(approved_only=True))
+    pending_allocations=[
+        {'loan_code':row['loan_code'],'allocated':row['ledger_committed']}
+        for row in reconciliation['rows']
+        if 'Missing from simulation' in row['issues']
+        and row['ledger_committed']>0
+        and row['loan_code'] not in approved_allocations
+    ]
     return {'settings':settings,'summary':{'cash':latest_cash,'ledger_deployed':deployed,'total_investment_committed':invested,'outstanding_principal':outstanding_principal,'ledger_profit_paid':profit_paid,'quarter_profit_collected':q_profit,'return_this_quarter':return_this_quarter,'total_return':total_return,'implied_fund_value':total_value,
                        'simulation_outstanding':sim_outstanding,'simulation_unpaid_profit':unpaid_profit,'active_notes':len(active),
                        'transaction_count':len(tx),'portfolio_count':len(pf),'last_transaction_date':last_tx_date,'simulation_as_of':sim_as_of,
@@ -671,7 +680,7 @@ def build_payload():
                        'investable_cash':latest_cash},
             'transactions':tx,'portfolio':pf,'schedule':schedule,'profit_schedule':profit_schedule,'due':due,'receivables':receivables,'issuers':issuers,
             'balance_breakdown':balance_breakdown,'action_totals':action_totals,'today':today,'cash_projection':projection,'cashflow_plan':cashflow_plan_rows(),
-            'reconciliation':reconciliation,'transaction_matching':transaction_matching,
+            'reconciliation':reconciliation,'transaction_matching':transaction_matching,'pending_allocations':pending_allocations,
             'projection_history':{'cutoff':projection_history.get('cutoff'),'event_count':len(projection_history.get('events',[]))}}
 
 
@@ -932,12 +941,27 @@ def simulation_update_snapshot(as_of=None):
         if t.get('action')=='Investment Committed' and t.get('note'):
             ledger_alloc[t['note']]=ledger_alloc.get(t['note'],0)+num(t.get('amount'))
     from allocations import allocation_map, row_values
-    saved_allocations=allocation_map(approved_only=True)
+    all_saved_allocations=allocation_map()
+    saved_allocations={code:record for code,record in all_saved_allocations.items()
+                       if record.get('approval_status') in ('Approved','Disbursed')}
+    added_entries=[]
     for code,record in sorted(saved_allocations.items()):
         if code in template_codes: continue
         rows.append(row_values(headers,record,len(rows)+1));template_codes.add(code)
+        added_entries.append({'loan_code':code,'note_name':record.get('note_name',''),
+                              'issuer_name':record.get('issuer_name',''),
+                              'investment_amount':record.get('investment_amount',0),
+                              'approval_status':record.get('approval_status','Approved')})
     missing=[{'loan_code':c,'allocated':a} for c,a in sorted(ledger_alloc.items()) if c not in template_codes]
-    return {'headers':headers,'rows':rows,'updates':updates,'missing_notes':missing,'as_of':as_of or (max([t.get('date') for t in tx if t.get('date')],default=''))}
+    pending_entries=[{'loan_code':code,'note_name':record.get('note_name',''),
+                      'investment_amount':record.get('investment_amount',0),
+                      'approval_status':record.get('approval_status','Draft')}
+                     for code,record in sorted(all_saved_allocations.items())
+                     if record.get('approval_status') not in ('Approved','Disbursed','Cancelled')]
+    return {'headers':headers,'rows':rows,'updates':updates,'missing_notes':missing,
+            'baseline_row_count':len(displayed['rows']),'added_entries':added_entries,
+            'pending_entries':pending_entries,
+            'as_of':as_of or (max([t.get('date') for t in tx if t.get('date')],default=''))}
 
 
 def build_updated_simulation_workbook(as_of=None):
