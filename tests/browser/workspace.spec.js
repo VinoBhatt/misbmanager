@@ -142,7 +142,7 @@ test('mobile navigation and login fit the screen',async({page})=>{
   await page.locator('.nav[data-view="data"]').click();
   await expect(page.locator('.validated-upload')).toHaveCount(3);
   await page.goto('/login');
-  await expect(page.getByLabel('Workspace password')).toBeVisible();
+  await expect(page.getByLabel('Admin password')).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);
   await page.screenshot({path:'.local/login-mobile.png',fullPage:true});
 });

@@ -10,7 +10,7 @@ Includes Fund Overview, Issuer Exposure, Receivables, Profit Analytics, Active P
 - Workers Static Assets: responsive HTML, CSS and JavaScript.
 - D1: monitoring, payment marks, issuer settings, cashflow plans, new-note allocation records, uploaded workbooks and previous workbook versions. Files are never served as public assets. No R2 account or bucket is required.
 - Workers AI: reads uploaded Cofundr note-card screenshots to prefill allocation fields. Screenshots are processed for the request and are not retained.
-- Shared workspace password and signed eight-hour HttpOnly session. This is a single shared workspace, without per-user roles or a user audit trail.
+- One admin account, using the password configured in `APP_PASSWORD`, with a signed eight-hour HttpOnly session. There is no registration, additional account management or per-user role system. Audit events record workspace activity without separate user identities.
 
 ## Preview on this computer
 

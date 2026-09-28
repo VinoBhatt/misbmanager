@@ -6,7 +6,7 @@ async function allocationGenerator(){
   const form=root.querySelector('#allocationForm'),file=root.querySelector('#allocationImage'),preview=root.querySelector('#allocationImagePreview'),message=root.querySelector('#allocationMessage'),saved=root.querySelector('#allocationSaved'),missing=root.querySelector('#missingAllocation');
   saved.insertAdjacentHTML('afterend','<div id="allocationHistory" class="panel mt" hidden></div>');const historyPanel=root.querySelector('#allocationHistory');
   root.querySelector('.allocation-layout>.panel h2').textContent='1. Read campaign picture';
-  root.querySelector('.allocation-layout>.panel .panelhead p').textContent='Upload the Cofundr campaign picture to prefill the new simulation entry. Every extracted value remains editable.';
+  root.querySelector('.allocation-layout>.panel .panelhead p').textContent='Upload or paste the Cofundr campaign picture (Ctrl+V or Cmd+V) to prefill the new simulation entry. Every extracted value remains editable.';
   form.querySelector('.allocation-fields').insertAdjacentHTML('beforebegin','<div id="entryValidation" class="entry-validation"><span>Enter the financing, allocation, rate and tenure to preview the calculated row.</span></div>');
   const validation=root.querySelector('#entryValidation');
   message.insertAdjacentHTML('afterend','<div id="extractionQuality" class="extraction-quality" hidden></div>');const extractionQuality=root.querySelector('#extractionQuality');
@@ -48,7 +48,27 @@ async function allocationGenerator(){
     saved.querySelectorAll('.delete-allocation').forEach(button=>button.addEventListener('click',async()=>{await fetch('/api/note-allocations/'+encodeURIComponent(button.dataset.code),{method:'DELETE'});await loadSaved();}));
     const search=saved.querySelector('#entrySearch'),status=saved.querySelector('#entryStatus'),count=saved.querySelector('#entryResultCount');if(search){const filter=()=>{let shown=0;saved.querySelectorAll('.entry-row').forEach(row=>{const visible=(!search.value||row.dataset.search.includes(search.value.toLowerCase()))&&(!status.value||row.dataset.status===status.value);row.hidden=!visible;if(visible)shown++});count.textContent=`${shown} of ${records.length} entries`};search.addEventListener('input',filter);status.addEventListener('change',filter);filter()}
   }
-  file.addEventListener('change',()=>{const image=file.files[0];if(!image){preview.hidden=true;return}preview.src=URL.createObjectURL(image);preview.hidden=false;message.textContent='Ready to read the screenshot.';});
+  let previewReader;
+  function showImage(){
+    if(previewReader)previewReader.abort();
+    previewReader=null;preview.hidden=true;preview.removeAttribute('src');preview.classList.remove('zoomed');
+    const image=file.files[0];if(!image)return;
+    if(!['image/png','image/jpeg','image/webp'].includes(image.type)){file.value='';message.textContent='Choose a PNG, JPEG or WebP image.';return;}
+    if(image.size>3*1024*1024){file.value='';message.textContent='The image must be 3 MB or smaller.';return;}
+    previewReader=new FileReader();
+    previewReader.onload=()=>{preview.src=previewReader.result;preview.hidden=false;message.textContent='Ready to read the screenshot.';};
+    previewReader.onerror=()=>{file.value='';message.textContent='Could not load the image. Try uploading or pasting it again.';};
+    previewReader.readAsDataURL(image);
+  }
+  file.addEventListener('change',showImage);
+  document.addEventListener('paste',event=>{
+    if(!file.isConnected)return;
+    const image=Array.from(event.clipboardData?.items||[]).find(item=>item.kind==='file'&&item.type.startsWith('image/'))?.getAsFile();
+    if(!image)return;
+    event.preventDefault();
+    const transfer=new DataTransfer();transfer.items.add(image);file.files=transfer.files;showImage();
+  },{signal:root._allocationAbort.signal});
+  root._allocationAbort.signal.addEventListener('abort',()=>{if(previewReader)previewReader.abort()},{once:true});
   preview.addEventListener('click',()=>preview.classList.toggle('zoomed'));preview.title='Click to zoom';document.addEventListener('keydown',event=>{if(event.key==='Escape')preview.classList.remove('zoomed')},{signal:root._allocationAbort.signal});
   root.querySelector('#extractAllocation').addEventListener('click',async event=>{const image=file.files[0];if(!image){message.textContent='Choose a screenshot first.';return}const button=event.currentTarget;button.disabled=true;button.textContent='Reading screenshot…';message.textContent='';try{const body=new FormData();body.append('image',image);const response=await fetch('/api/note-allocation/extract',{method:'POST',body});const data=await response.json();if(!response.ok)throw new Error(data.error||'The screenshot could not be read.');applyExtracted(data);updateValidation();message.textContent='Visible note details were extracted. Review them and complete the issuer fields.';}catch(error){message.textContent=error.message;}finally{button.disabled=false;button.textContent='Read screenshot';}});
   missing.addEventListener('change',()=>{const option=missing.selectedOptions[0];if(!option.value)return;field('loan_code').value=option.value;field('investment_amount').value=option.dataset.amount||'';updateValidation();});
