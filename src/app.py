@@ -727,6 +727,30 @@ def transaction_note_override(transaction_id):
 def audit_events():
     return jsonify(audit_rows(request.args.get('limit',200)))
 
+
+@app.get('/api/audit-events.csv')
+def audit_events_csv():
+    output=io.StringIO(newline='');writer=csv.writer(output)
+    writer.writerow(('Time','Action','Entity type','Entity ID','Details'))
+    for row in audit_rows(500):
+        writer.writerow((row['created_at'],row['action'],row['entity_type'],row['entity_id'],
+                         json.dumps(row.get('details') or {},sort_keys=True,ensure_ascii=False)))
+    data=io.BytesIO(('\ufeff'+output.getvalue()).encode('utf-8'))
+    return send_file(data,mimetype='text/csv',as_attachment=True,download_name='MISB_Audit_Log.csv')
+
+
+@app.get('/api/health')
+def health():
+    con=connect()
+    try:
+        source_count=list(con.execute('SELECT COUNT(*) AS total FROM sources'))[0]['total']
+        workbook_count=list(con.execute('SELECT COUNT(*) AS total FROM workbook_versions'))[0]['total']
+        audit_count=list(con.execute('SELECT COUNT(*) AS total FROM audit_events'))[0]['total']
+    finally:
+        con.close()
+    return jsonify({'ok':True,'database':'connected','sources':source_count,
+                    'workbook_versions':workbook_count,'audit_events':audit_count})
+
 @app.route('/api/monitoring/<loan_code>', methods=['POST'])
 def save_monitoring(loan_code):
     d=request.get_json(force=True) or {}

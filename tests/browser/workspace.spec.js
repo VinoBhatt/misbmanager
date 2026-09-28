@@ -5,9 +5,22 @@ test('every fund management view renders without browser errors', async ({page})
   page.on('pageerror',error=>errors.push(error.message));
   await page.goto('/');
   await expect(page.locator('#content .kpis').first()).toBeVisible();
+  await expect(page.locator('#systemHealth')).toContainText('Service online');
   for(const view of ['reconciliation','matching','exposure','receivables','repayment-alerts','profit','portfolio','cash','projection','monitor','reports','statement','allocation','allocation-email','simcopy','data','audit','dashboard']) {
     await page.locator(`.nav[data-view="${view}"]`).click();
     await expect(page.locator('#content')).not.toBeEmpty();
+  }
+  await page.locator('.nav[data-view="audit"]').click();
+  await expect(page.getByRole('link',{name:'Export audit CSV'})).toBeVisible();
+  await expect(page.getByLabel('Search audit events')).toBeVisible();
+  await expect(page.locator('#auditCount')).toContainText('events');
+  await page.locator('.nav[data-view="monitor"]').click();
+  const editMonitoring=page.locator('.editmon').first();
+  if(await editMonitoring.count()){
+    await editMonitoring.click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#modal')).toBeHidden();
   }
   expect(errors).toEqual([]);
   await page.screenshot({path:'.local/dashboard.png',fullPage:true});

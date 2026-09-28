@@ -1,5 +1,6 @@
 """MISB PDF statements: exact decimal ledger amounts and reference artwork."""
 import io
+import csv
 from zipfile import BadZipFile
 from datetime import datetime, date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -297,13 +298,18 @@ def register_statement_routes(app):
             filename=f'MISB_Account_Statement_{result["as_of"]}.pdf';pdf=statement_pdf(result)
             from storage import save_statement_report_run
             summary=result.get('summary',{})
-            save_statement_report_run(result['as_of'],result['version'],filename,{
+            record=save_statement_report_run(result['as_of'],result['version'],filename,{
                 'row_count':result.get('row_count',0),'page_count':result.get('page_count',0),
                 'opening_balance':summary.get('starting_balance',0),'closing_balance':summary.get('ending_balance',0),
                 'gross_returns':summary.get('total_gross_returns',0)})
-            audit_event('Generated account statement','report',result['as_of'],{
-                'filename':filename,'source_version':result['version'],'rows':result.get('row_count',0)})
-            return send_file(pdf,mimetype='application/pdf',as_attachment=True,download_name=filename)
+            audit_event('Generated account statement' if record['created'] else 'Downloaded existing account statement',
+                        'report',result['as_of'],{
+                'history_id':record['id'],'filename':filename,'source_version':result['version'],
+                'rows':result.get('row_count',0)})
+            response=send_file(pdf,mimetype='application/pdf',as_attachment=True,download_name=filename)
+            response.headers['X-Statement-History-ID']=str(record['id'])
+            response.headers['X-Statement-History-New']='1' if record['created'] else '0'
+            return response
         except (ValueError,KeyError) as error:
             return jsonify(error=str(error)),400
 
@@ -311,6 +317,60 @@ def register_statement_routes(app):
     def account_statement_history():
         from storage import statement_report_runs
         return jsonify(statement_report_runs(request.args.get('limit',20)))
+
+    @app.get('/api/account-statement-runs.csv')
+    def account_statement_register():
+        from storage import statement_report_runs
+        output=io.StringIO(newline='')
+        writer=csv.writer(output)
+        writer.writerow(('Generated at','Statement through','PDF filename','Rows','Pages','Opening balance (RM)',
+                         'Closing balance (RM)','Gross returns (RM)','Source workbook','Source SHA-256',
+                         'Source size (bytes)','Source available','Last verified at','Verification result',
+                         'Mismatched fields'))
+        for run in statement_report_runs(500):
+            verification=('Never verified' if run['last_verification_matches'] is None else
+                          ('Matches' if run['last_verification_matches'] else 'Review mismatch'))
+            writer.writerow((run['created_at'],run['as_of'],run['filename'],run['row_count'],run['page_count'],
+                             f"{run['opening_balance']:.2f}",f"{run['closing_balance']:.2f}",
+                             f"{run['gross_returns']:.2f}",run['source_filename'],run['source_sha256'],
+                             run['source_byte_size'],'Yes' if run['source_available'] else 'No',
+                             run['last_verified_at'] or '',verification,
+                             ', '.join(run['last_verification_mismatches'])))
+        data=io.BytesIO(('\ufeff'+output.getvalue()).encode('utf-8'))
+        return send_file(data,mimetype='text/csv',as_attachment=True,
+                         download_name='MISB_Account_Statement_Register.csv')
+
+    @app.post('/api/account-statement-runs/<int:run_id>/verify')
+    def verify_account_statement(run_id):
+        from storage import statement_report_run,read_source_version,save_statement_verification
+        run=statement_report_run(run_id)
+        if not run:
+            return jsonify(error='That statement history record was not found.'),404
+        try:
+            source,_=read_source_version('transactions',run['source_object_key'])
+            result=statement_data(source.read(),run['as_of'])
+            summary=result.get('summary',{})
+            values={
+                'Rows':(int(run['row_count']),int(result['row_count'])),
+                'Pages':(int(run['page_count']),int(result['page_count'])),
+                'Opening balance':(f"{Decimal(str(run['opening_balance'])):.2f}",summary['starting_balance']),
+                'Closing balance':(f"{Decimal(str(run['closing_balance'])):.2f}",summary['ending_balance']),
+                'Gross returns':(f"{Decimal(str(run['gross_returns'])):.2f}",summary['total_gross_returns'])}
+            checks={name:{'recorded':recorded,'calculated':calculated,
+                          'match':recorded==calculated}
+                    for name,(recorded,calculated) in values.items()}
+            matches=all(check['match'] for check in checks.values())
+            mismatches=[name for name,check in checks.items() if not check['match']]
+            verification=save_statement_verification(run_id,matches,mismatches)
+            audit_event('Verified account statement','report',run['as_of'],{
+                'history_id':run_id,'matches':matches,
+                'mismatches':mismatches,
+                'source_version':run['source_object_key']})
+            return jsonify({'history_id':run_id,'matches':matches,'checks':checks,
+                            'source_sha256':run['source_sha256'],
+                            'verified_at':verification['verified_at']})
+        except (ValueError,KeyError) as error:
+            return jsonify(error=str(error)),409
 
     @app.get('/api/account-statement-runs/<int:run_id>/pdf')
     def reproduce_account_statement(run_id):
@@ -322,7 +382,10 @@ def register_statement_routes(app):
             result=statement_data(source.read(),run['as_of'])
             audit_event('Recreated account statement','report',run['as_of'],{
                 'history_id':run_id,'filename':run['filename'],'source_version':run['source_object_key']})
-            return send_file(statement_pdf(result),mimetype='application/pdf',as_attachment=True,
-                             download_name=run['filename'])
+            response=send_file(statement_pdf(result),mimetype='application/pdf',as_attachment=True,
+                               download_name=run['filename'])
+            if run.get('source_sha256'):
+                response.headers['X-Statement-Source-SHA256']=run['source_sha256']
+            return response
         except (ValueError,KeyError) as error:
             return jsonify(error=str(error)),400

@@ -1,8 +1,9 @@
 """Authentication and static hosting shared by local Flask and Workers WSGI."""
 import hmac
+import mimetypes
 import os
 from pathlib import Path
-from flask import Response, jsonify, request, redirect
+from flask import Response, jsonify, request, redirect, abort
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from werkzeug.exceptions import HTTPException
 from storage import cloud
@@ -34,14 +35,18 @@ def asset(path):
         res = run_sync(cloud().ASSETS.fetch('https://assets.local/' + path))
         body = run_sync(res.bytes())
         return Response(body, status=res.status, headers=res.headers)
-    from flask import send_from_directory
-    return send_from_directory(Path(__file__).resolve().parent.parent / 'public', path)
+    root=(Path(__file__).resolve().parent.parent/'public').resolve()
+    target=(root/path).resolve()
+    if not target.is_relative_to(root) or not target.is_file():
+        abort(404)
+    mimetype=mimetypes.guess_type(target.name)[0] or 'application/octet-stream'
+    return Response(target.read_bytes(),mimetype=mimetype)
 
 
 def configure_web(app):
     @app.before_request
     def protect():
-        public = request.path in ('/login','/api/login','/static/style.css','/static/login.js')
+        public = request.path in ('/login','/api/login','/static/style.css','/static/login.js','/static/favicon.svg')
         if not public and not authenticated():
             if request.path.startswith('/api/'):
                 return jsonify(error='Please sign in to continue.'),401

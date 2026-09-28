@@ -2,11 +2,11 @@
   "name": "misb-manager",
   "private": true,
   "scripts": {
-    "build": "uv run pywrangler deploy --dry-run",
-    "dev": "uv run pywrangler dev",
-    "deploy": "uv run pywrangler deploy",
-    "deploy:preview": "uv run pywrangler versions upload",
-    "check:deploy": "uv run pywrangler deploy --dry-run",
+    "build": "python scripts/run_pywrangler.py deploy --dry-run",
+    "dev": "python scripts/run_pywrangler.py dev",
+    "deploy": "python scripts/run_pywrangler.py deploy",
+    "deploy:preview": "python scripts/run_pywrangler.py versions upload",
+    "check:deploy": "python scripts/run_pywrangler.py deploy --dry-run",
     "test": "python -m unittest discover -s tests -v"
   },
   "devDependencies": {

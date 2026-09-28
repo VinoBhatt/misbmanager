@@ -1,4 +1,5 @@
 import io
+import csv
 import os
 from pathlib import Path
 import sys
@@ -95,7 +96,8 @@ class StatementTests(unittest.TestCase):
             initialize(Path(directory))
             with patch.dict(os.environ,{'MISB_DATA_DIR':directory,'MISB_LOCAL_PREVIEW':'1'}):
                 client=app.test_client()
-                response=client.post('/api/account-statement',data={'file':(io.BytesIO(workbook(ROWS)),'ledger.xlsx'),'as_of':'2026-09-02'})
+                ledger_bytes=workbook(ROWS)
+                response=client.post('/api/account-statement',data={'file':(io.BytesIO(ledger_bytes),'ledger.xlsx'),'as_of':'2026-09-02'})
                 self.assertEqual(response.status_code,200,response.data)
                 self.assertEqual(response.json['row_count'],7)
                 version=response.json['version']
@@ -104,18 +106,65 @@ class StatementTests(unittest.TestCase):
                 self.assertEqual(response.status_code,200,response.data[:100])
                 self.assertEqual(response.mimetype,'application/pdf')
                 self.assertTrue(response.data.startswith(b'%PDF-'))
+                self.assertEqual(response.headers['X-Statement-History-New'],'1')
                 history=client.get('/api/account-statement-runs').json
                 self.assertEqual(len(history),1)
                 self.assertEqual(history[0]['as_of'],'2026-09-02')
                 self.assertEqual(history[0]['source_object_key'],version)
                 self.assertEqual(history[0]['row_count'],7)
                 self.assertEqual(history[0]['closing_balance'],901.23)
+                self.assertEqual(history[0]['source_filename'],'ledger.xlsx')
+                self.assertEqual(history[0]['source_available'],1)
+                self.assertEqual(len(history[0]['source_sha256']),64)
+                self.assertGreater(history[0]['source_byte_size'],0)
+                register=client.get('/api/account-statement-runs.csv')
+                self.assertEqual(register.status_code,200)
+                self.assertEqual(register.mimetype,'text/csv')
+                register_rows=list(csv.reader(io.StringIO(register.data.decode('utf-8-sig'))))
+                self.assertEqual(len(register_rows),2)
+                self.assertEqual(register_rows[0][0:3],['Generated at','Statement through','PDF filename'])
+                self.assertEqual(register_rows[1][1],'2026-09-02')
+                self.assertEqual(register_rows[1][8],'ledger.xlsx')
+                self.assertEqual(register_rows[1][9],history[0]['source_sha256'])
+                self.assertEqual(register_rows[1][11],'Yes')
                 self.assertTrue(any(row['action']=='Generated account statement'
+                                    for row in client.get('/api/audit-events').json))
+                verified=client.post(f"/api/account-statement-runs/{history[0]['id']}/verify")
+                self.assertEqual(verified.status_code,200,verified.data)
+                self.assertTrue(verified.json['matches'])
+                self.assertTrue(all(check['match'] for check in verified.json['checks'].values()))
+                self.assertEqual(verified.json['checks']['Closing balance']['calculated'],'901.23')
+                self.assertEqual(verified.json['source_sha256'],history[0]['source_sha256'])
+                self.assertTrue(verified.json['verified_at'])
+                verified_history=client.get('/api/account-statement-runs').json
+                self.assertEqual(verified_history[0]['last_verification_matches'],1)
+                self.assertEqual(verified_history[0]['last_verification_mismatches'],[])
+                self.assertEqual(verified_history[0]['last_verified_at'],verified.json['verified_at'])
+                verified_register=list(csv.reader(io.StringIO(
+                    client.get('/api/account-statement-runs.csv').data.decode('utf-8-sig'))))
+                self.assertEqual(verified_register[1][12],verified.json['verified_at'])
+                self.assertEqual(verified_register[1][13],'Matches')
+                self.assertEqual(verified_register[1][14],'')
+                self.assertTrue(any(row['action']=='Verified account statement'
+                                    for row in client.get('/api/audit-events').json))
+                self.assertEqual(client.post('/api/account-statement-runs/999999/verify').status_code,404)
+                repeated=client.get('/api/export/account-statement.pdf',
+                                    query_string={'as_of':'2026-09-02','version':version})
+                self.assertEqual(repeated.status_code,200)
+                self.assertEqual(repeated.headers['X-Statement-History-New'],'0')
+                self.assertEqual(repeated.headers['X-Statement-History-ID'],str(history[0]['id']))
+                self.assertEqual(len(client.get('/api/account-statement-runs').json),1)
+                self.assertTrue(any(row['action']=='Downloaded existing account statement'
                                     for row in client.get('/api/audit-events').json))
                 reproduced=client.get(f"/api/account-statement-runs/{history[0]['id']}/pdf")
                 self.assertEqual(reproduced.status_code,200,reproduced.data[:100])
                 self.assertEqual(reproduced.mimetype,'application/pdf')
                 self.assertTrue(reproduced.data.startswith(b'%PDF-'))
+                self.assertEqual(reproduced.headers['X-Statement-Source-SHA256'],history[0]['source_sha256'])
+                source=client.get('/api/source-versions/transactions/download',
+                                  query_string={'object_key':history[0]['source_object_key']})
+                self.assertEqual(source.status_code,200)
+                self.assertEqual(source.data,ledger_bytes)
                 self.assertEqual(len(client.get('/api/account-statement-runs').json),1)
                 self.assertEqual(client.get('/api/account-statement').json['version'],version)
                 self.assertTrue(any(row['action']=='Recreated account statement'

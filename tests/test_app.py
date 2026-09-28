@@ -417,11 +417,22 @@ class WebsiteTests(unittest.TestCase):
     def test_login_and_cross_origin_protection(self):
         with patch.dict(os.environ,{'MISB_LOCAL_PREVIEW':'0','APP_PASSWORD':'test-password-long','SESSION_SECRET':'x'*48}):
             self.assertEqual(self.client.get('/api/data').status_code,401)
+            self.assertEqual(self.client.get('/api/health').status_code,401)
             self.assertEqual(self.client.get('/').status_code,302)
             self.assertEqual(self.client.get('/login').status_code,200)
+            self.assertEqual(self.client.get('/static/favicon.svg').status_code,200)
             self.assertEqual(self.client.post('/api/login',json={'password':'bad'}).status_code,401)
             self.assertEqual(self.client.post('/api/login',json={'password':'test-password-long'}).status_code,200)
             self.assertEqual(self.client.get('/api/data').status_code,200)
+            health=self.client.get('/api/health')
+            self.assertEqual(health.status_code,200)
+            self.assertTrue(health.json['ok'])
+            self.assertEqual(health.json['database'],'connected')
+            self.assertGreaterEqual(health.json['sources'],0)
+            audit=self.client.get('/api/audit-events.csv')
+            self.assertEqual(audit.status_code,200)
+            self.assertEqual(audit.mimetype,'text/csv')
+            self.assertTrue(audit.data.decode('utf-8-sig').startswith('Time,Action,Entity type,Entity ID,Details'))
             self.assertEqual(self.client.post('/api/settings',json={'issuer_limit':100},headers={'Origin':'https://evil.example'}).status_code,403)
             self.assertEqual(self.client.post('/api/logout').status_code,200)
             self.assertEqual(self.client.get('/api/data').status_code,401)
@@ -432,6 +443,8 @@ class WebsiteTests(unittest.TestCase):
         response=self.client.get('/')
         self.assertEqual(response.status_code,200)
         self.assertEqual(response.headers['Cache-Control'],'no-store')
+        self.assertIn(b'Skip to workspace content',response.data)
+        self.assertEqual(self.client.get('/static/favicon.svg').mimetype,'image/svg+xml')
 
 
 if __name__=='__main__':

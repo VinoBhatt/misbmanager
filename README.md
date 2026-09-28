@@ -59,7 +59,7 @@ In the **misbmanager** Worker's **Settings → Builds**, use these commands with
 | Deploy command | `npm run deploy` |
 | Non-production branch deploy command (if enabled) | `npm run deploy:preview` |
 
-The build command prepares the Python dependencies and validates the Worker with a deployment dry run. It does not publish anything. The deploy command uses Pywrangler to package Python dependencies before publishing. Preview uploads create a version without promoting it to production.
+The build command prepares the Python dependencies and validates the Worker with a deployment dry run. It does not publish anything. The npm commands use the project virtual environment on Windows or Linux and fall back to `uv` when needed. The deploy command uses Pywrangler to package Python dependencies before publishing. Preview uploads create a version without promoting it to production.
 
 If a build reports `Missing script: "build"`, ensure the commit being built contains the updated `package.json`, then retry. The npm install-script notices in the supplied log were warnings; the missing build script caused that failure. Cloud resource and secret setup below is still required.
 
@@ -118,7 +118,7 @@ npx wrangler d1 migrations apply misb-manager --remote
 npm run deploy
 ```
 
-Migration `0002_workbook_storage.sql` adds workbook storage without altering existing monitoring or payment records. Migrations `0003_note_allocations.sql` and `0004_allocation_reference.sql` add new-note records and retain the full Cofundr reference number. Fresh installations must apply every migration. The Worker is named `misbmanager`; its database is `misb-manager`.
+Migration `0002_workbook_storage.sql` adds workbook storage without altering existing monitoring or payment records. Migrations `0003_note_allocations.sql` and `0004_allocation_reference.sql` add new-note records and retain the full Cofundr reference number. Migrations through `0011_statement_verifications.sql` add audit history, report history, allocation versioning, and persistent statement verification. Fresh installations must apply every migration. The Worker is named `misbmanager`; its database is `misb-manager`.
 
 Existing local preview files are imported into SQLite automatically on the next `scripts/local.py` startup. If workbooks were uploaded to an earlier R2 installation, re-import those originals through Data Sources; remote R2 data is not copied or deleted automatically.
 
@@ -161,6 +161,8 @@ The **Data Sources** page validates an Excel workbook before import and requires
 
 Every imported source workbook remains an immutable D1 version. **Workbook history and rollback** lists the stored transaction, simulation, and projection versions and can restore an earlier version while retaining the newer copies.
 
+Every generated account-statement PDF also has a D1 history record tied to the exact immutable transaction workbook and cut-off date. The history can recreate the PDF, download its source Excel file, display the source SHA-256 fingerprint, and verify the recorded row count, page count, balances, and gross returns. Verification results persist across refreshes. The Excel-compatible statement register CSV includes source and verification details. Repeated downloads of the same workbook and cut-off reuse the original record instead of creating duplicates.
+
 ### New Note Allocation
 
 Open **New Note Allocation** and upload a PNG, JPEG or WebP screenshot of the Cofundr note card. **Read screenshot** prefills the note name, reference number, note type, risk rating, financing amount, outstanding amount, profit rate, tenure, campaign dates and status. Review those values and complete the issuer name, company ID, business description, MISB allocation, payment type and disbursal date.
@@ -173,7 +175,7 @@ Each generated simulation workbook records its cut-off date, row counts and a co
 
 The **Repayment Alerts** view combines unpaid principal and profit schedule items into overdue, seven-day, and thirty-day queues with note, issuer, due date, and expected amount.
 
-The **Audit Log** records workbook imports and restorations, allocation approvals, transaction assignments, issuer-limit changes, monitoring updates, and planned cash-flow changes.
+The **Audit Log** records workbook imports and restorations, allocation approvals, transaction assignments, issuer-limit changes, monitoring updates, planned cash-flow changes, and statement verification. It supports text and record-type filters and an Excel-compatible CSV export. The authenticated `/api/health` endpoint checks D1 connectivity and reports source, workbook-version, and audit-event counts; the sidebar shows its current result.
 
 The **Allocation Email** fund position calculates available cash from the latest ledger balance on the request date and expected receipts from the simulation repayment schedule. When override fields are blank, the latest successful `Deposit Approved` and `Withdrawal Approved` entries are filled automatically from the transaction ledger.
 

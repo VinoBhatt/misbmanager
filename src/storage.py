@@ -286,6 +286,10 @@ def simulation_report_run(run_id):
 def save_statement_report_run(as_of, source_object_key, filename, metrics):
     con=connect()
     try:
+        existing=[dict(row) for row in con.execute('''SELECT id,created_at FROM statement_report_runs
+            WHERE as_of=? AND source_object_key=? ORDER BY id DESC LIMIT 1''',(as_of,source_object_key))]
+        if existing:
+            return {**existing[0],'created':False}
         con.execute('''INSERT INTO statement_report_runs(
             as_of,source_object_key,filename,row_count,page_count,opening_balance,closing_balance,gross_returns
         ) VALUES(?,?,?,?,?,?,?,?)''',(
@@ -293,6 +297,9 @@ def save_statement_report_run(as_of, source_object_key, filename, metrics):
             float(metrics.get('opening_balance',0)),float(metrics.get('closing_balance',0)),
             float(metrics.get('gross_returns',0))))
         con.commit()
+        saved=[dict(row) for row in con.execute('''SELECT id,created_at FROM statement_report_runs
+            WHERE as_of=? AND source_object_key=? ORDER BY id DESC LIMIT 1''',(as_of,source_object_key))]
+        return {**saved[0],'created':True}
     finally:
         con.close()
 
@@ -300,19 +307,64 @@ def save_statement_report_run(as_of, source_object_key, filename, metrics):
 def statement_report_runs(limit=20):
     con=connect()
     try:
-        return [dict(row) for row in con.execute('''SELECT id,as_of,source_object_key,filename,row_count,
-            page_count,opening_balance,closing_balance,gross_returns,created_at
-            FROM statement_report_runs ORDER BY id DESC LIMIT ?''',(max(1,min(int(limit),100)),))]
+        rows=[dict(row) for row in con.execute('''SELECT r.id,r.as_of,r.source_object_key,r.filename,
+            r.row_count,r.page_count,r.opening_balance,r.closing_balance,r.gross_returns,r.created_at,
+            COALESCE(m.filename,'') AS source_filename,COALESCE(v.sha256,'') AS source_sha256,
+            COALESCE(v.byte_size,0) AS source_byte_size,
+            CASE WHEN v.object_key IS NULL THEN 0 ELSE 1 END AS source_available,
+            verification.matches AS last_verification_matches,
+            COALESCE(verification.mismatches,'[]') AS last_verification_mismatches,
+            verification.verified_at AS last_verified_at
+            FROM statement_report_runs r
+            LEFT JOIN workbook_versions v ON v.object_key=r.source_object_key
+            LEFT JOIN source_version_meta m ON m.object_key=r.source_object_key
+            LEFT JOIN statement_report_verifications verification ON verification.id=(
+                SELECT latest.id FROM statement_report_verifications latest
+                WHERE latest.statement_run_id=r.id ORDER BY latest.id DESC LIMIT 1)
+            ORDER BY r.id DESC LIMIT ?''',(max(1,min(int(limit),500)),))]
     finally:
         con.close()
+    for row in rows:
+        try: row['last_verification_mismatches']=json.loads(row['last_verification_mismatches'])
+        except (TypeError,json.JSONDecodeError): row['last_verification_mismatches']=[]
+    return rows
 
 
 def statement_report_run(run_id):
     con=connect()
     try:
-        rows=[dict(row) for row in con.execute('''SELECT id,as_of,source_object_key,filename,row_count,
-            page_count,opening_balance,closing_balance,gross_returns,created_at
-            FROM statement_report_runs WHERE id=?''',(int(run_id),))]
+        rows=[dict(row) for row in con.execute('''SELECT r.id,r.as_of,r.source_object_key,r.filename,
+            r.row_count,r.page_count,r.opening_balance,r.closing_balance,r.gross_returns,r.created_at,
+            COALESCE(m.filename,'') AS source_filename,COALESCE(v.sha256,'') AS source_sha256,
+            COALESCE(v.byte_size,0) AS source_byte_size,
+            CASE WHEN v.object_key IS NULL THEN 0 ELSE 1 END AS source_available,
+            verification.matches AS last_verification_matches,
+            COALESCE(verification.mismatches,'[]') AS last_verification_mismatches,
+            verification.verified_at AS last_verified_at
+            FROM statement_report_runs r
+            LEFT JOIN workbook_versions v ON v.object_key=r.source_object_key
+            LEFT JOIN source_version_meta m ON m.object_key=r.source_object_key
+            LEFT JOIN statement_report_verifications verification ON verification.id=(
+                SELECT latest.id FROM statement_report_verifications latest
+                WHERE latest.statement_run_id=r.id ORDER BY latest.id DESC LIMIT 1)
+            WHERE r.id=?''',(int(run_id),))]
     finally:
         con.close()
-    return rows[0] if rows else None
+    if not rows: return None
+    try: rows[0]['last_verification_mismatches']=json.loads(rows[0]['last_verification_mismatches'])
+    except (TypeError,json.JSONDecodeError): rows[0]['last_verification_mismatches']=[]
+    return rows[0]
+
+
+def save_statement_verification(run_id, matches, mismatches):
+    con=connect()
+    try:
+        con.execute('''INSERT INTO statement_report_verifications(statement_run_id,matches,mismatches)
+            VALUES(?,?,?)''',(int(run_id),1 if matches else 0,json.dumps(list(mismatches))))
+        con.commit()
+        rows=[dict(row) for row in con.execute('''SELECT id,statement_run_id,matches,mismatches,verified_at
+            FROM statement_report_verifications WHERE statement_run_id=? ORDER BY id DESC LIMIT 1''',
+            (int(run_id),))]
+        return rows[0]
+    finally:
+        con.close()
