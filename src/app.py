@@ -909,7 +909,7 @@ def rebuild_source_cache(kind):
 
 
 SIMULATION_COMPARE_FIELDS=('Loan Status','Investment Amount','Paid Principal','Unpaid Principal',
-                           'Paid Profit','Unpaid Profit','Late Profit','SST')
+                           'Paid Profit','Unpaid Profit','Late Profit','SST','Email on Allocation','Email on Disbursement')
 
 
 def compact_simulation_snapshot(headers, rows):
@@ -1121,6 +1121,8 @@ def simulation_update_snapshot(as_of=None, include_drafts=False, compare_to=None
         if approved:
             added_entries.append(entry_summary);report_codes.add(code)
         else: draft_preview_entries.append(entry_summary)
+    from email_tracking import apply_email_dates
+    apply_email_dates(headers, rows, updates)
     missing=[{'loan_code':c,'allocated':a} for c,a in sorted(ledger_alloc.items()) if c not in report_codes]
     pending_entries=[{'loan_code':code,'note_name':record.get('note_name',''),
                       'investment_amount':record.get('investment_amount',0),
@@ -1210,6 +1212,7 @@ def build_updated_simulation_workbook(as_of=None, snap=None):
         input_fields=['Loan Status','Paid Principal','Paid Profit','Late Profit','Early Repayment','Early Repayment Date']
         if up.get('_expanded') and up.get('Loan Status')=='Completed':
             input_fields+=['Gross Profit Earned','Late Payment Charges','SST']
+        input_fields += [h for h in ('Email on Allocation','Email on Disbursement') if h in up]
         for h in input_fields:
             if h not in hidx: continue
             v=up.get(h)
@@ -1397,3 +1400,6 @@ from statements import register_statement_routes
 register_statement_routes(app)
 from allocations import register_allocation_routes
 register_allocation_routes(app)
+
+from email_tracking import register_email_tracking_routes
+register_email_tracking_routes(app)

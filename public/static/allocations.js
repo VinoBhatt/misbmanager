@@ -11,6 +11,42 @@ async function allocationGenerator(){
   const validation=root.querySelector('#entryValidation');
   message.insertAdjacentHTML('afterend','<div id="extractionQuality" class="extraction-quality" hidden></div>');const extractionQuality=root.querySelector('#extractionQuality');
   const field=name=>form.elements.namedItem(name);
+  field('issuer_name').closest('label').insertAdjacentHTML('beforebegin','<label class="span2">Reuse issuer details<select id="issuerPreset"><option value="">Choose an existing issuer</option><option value="new">Other / new issuer</option></select><small id="issuerPresetHelp" class="muted">Reuse company and business details, or choose Other / new issuer. All fields remain editable.</small></label>');
+  const issuerPreset=root.querySelector('#issuerPreset'),issuerPresetHelp=root.querySelector('#issuerPresetHelp');
+  let issuerPresets=[];
+  const issuerKey=value=>String(value??'').trim().replace(/\s+/g,' ').toLowerCase();
+  function syncIssuerPreset(){
+    const index=issuerPresets.findIndex(record=>issuerKey(record.issuer_name)===issuerKey(field('issuer_name').value)&&String(record.company_id??'')===field('company_id').value);
+    issuerPreset.value=index>=0?String(index):field('issuer_name').value?'new':'';
+  }
+  function loadIssuerPresets(records,snapshot){
+    const columns={'Issuer Name':'issuer_name','Company ID':'company_id','Business Description':'business_description','Product Type':'product_type','Payment Type **':'payment_type','Loan Code':'loan_code'};
+    const historical=(snapshot.rows||[]).map(row=>Object.fromEntries(Object.entries(columns).map(([column,name])=>[name,row[(snapshot.headers||[]).indexOf(column)]??'']))).reverse();
+    const presets=new Map();
+    // Saved records arrive newest first and take precedence over historical rows.
+    for(const record of [...records,...historical]){
+      if(!issuerKey(record.issuer_name))continue;
+      const key=issuerKey(record.issuer_name)+'|'+String(record.company_id??'');
+      if(!presets.has(key))presets.set(key,record);
+    }
+    issuerPresets=Array.from(presets.values()).sort((a,b)=>a.issuer_name.localeCompare(b.issuer_name));
+    issuerPreset.innerHTML='<option value="">Choose an existing issuer</option>'+issuerPresets.map((record,index)=>`<option value="${index}">${esc(record.issuer_name)}${record.company_id?` (Company ${esc(record.company_id)})`:''}</option>`).join('')+'<option value="new">Other / new issuer</option>';
+    syncIssuerPreset();
+  }
+  issuerPreset.addEventListener('change',()=>{
+    if(issuerPreset.value==='')return;
+    const record=issuerPreset.value==='new'?null:issuerPresets[Number(issuerPreset.value)];
+    for(const name of ['issuer_name','company_id','business_description']){
+      field(name).value=record?.[name]??'';field(name).classList.remove('ai-filled');
+    }
+    // Preserve a note type already read from the current campaign picture.
+    if(!field('product_type').classList.contains('ai-filled'))field('product_type').value=record?.product_type||'Islamic Invoice Financing (IIF) - Receivables';
+    field('payment_type').value=['Profit Only','Bullet','Equal Instalment'].includes(record?.payment_type)?record.payment_type:'Profit Only';
+    issuerPresetHelp.textContent=record?`Details copied from ${record.loan_code||'an existing note'}. Review and edit them for this campaign.`:'Enter the new issuer name, company ID and business description. Saving the campaign adds it to this list.';
+    updateValidation();
+    if(!record)field('issuer_name').focus();
+  });
+  for(const name of ['issuer_name','company_id'])field(name).addEventListener('input',syncIssuerPreset);
   let missingNotes=[];
   function setValue(name,value){if(value!==null&&value!==undefined&&value!==''){field(name).value=value;field(name).classList.add('ai-filled')}}
   function normalizeProduct(value){return /islamic invoice financing/i.test(value||'')?'Islamic Invoice Financing (IIF) - Receivables':value;}
@@ -26,6 +62,7 @@ async function allocationGenerator(){
   function editRecord(record){
     ['loan_code','note_name','issuer_name','company_id','product_type','rating','loan_note_size','investment_amount','term','tenor_type','payment_type','allocation_date','disbursal_date','campaign_start','campaign_end','status','business_description','remarks'].forEach(name=>field(name).value=record[name]??'');
     field('gross_pa').value=Number(record.gross_pa||0)*100;
+    syncIssuerPreset();
     message.textContent=`Editing ${record.loan_code}. Saving updates this campaign entry and records the change in the audit log.`;
     updateValidation();
     form.scrollIntoView({behavior:'smooth',block:'start'});field('note_name').focus();
@@ -36,6 +73,7 @@ async function allocationGenerator(){
   }
   async function loadSaved(){
     const [records,snapshot]=await Promise.all([(await fetch('/api/note-allocations')).json(),(await fetch('/api/simulation-preview')).json()]);
+    loadIssuerPresets(records,snapshot);
     missingNotes=snapshot.missing_notes||[];missing.innerHTML='<option value="">Choose or enter reference below</option>'+missingNotes.map(x=>`<option value="${esc(x.loan_code)}" data-amount="${x.allocated}">${esc(x.loan_code)} · ${RM(x.allocated)}</option>`).join('');
     saved.innerHTML=`<div class="panelhead"><div><h2>Saved campaign entries</h2><p>Approved records create new rows in the generated simulation report.</p></div><a class="primary" href="/api/export/updated-simulation.xlsx">Generate simulation report</a></div>${records.length?`<div class="entry-filters"><input id="entrySearch" type="search" placeholder="Search note, issuer or name"><select id="entryStatus"><option value="">All statuses</option>${['Draft','Ready for Approval','Approved','Disbursed','Cancelled'].map(status=>`<option>${status}</option>`).join('')}</select><span id="entryResultCount"></span></div><div class="tablewrap"><table><thead><tr><th>Note</th><th>Issuer</th><th>Allocation</th><th>Rate</th><th>Tenure</th><th>Disbursal</th><th></th></tr></thead><tbody>${records.map(r=>`<tr class="entry-row" data-status="${esc(r.approval_status||'Draft')}" data-search="${esc(`${r.loan_code} ${r.note_name} ${r.issuer_name}`.toLowerCase())}"><td><b>${esc(r.loan_code)}</b><br><span class="muted">${esc(r.note_name)}</span></td><td>${esc(r.issuer_name)}</td><td>${RM(r.investment_amount)}</td><td>${PCT(r.gross_pa)}</td><td>${r.term} ${esc(r.tenor_type)}</td><td>${dmy(r.disbursal_date)}</td><td><div class="entry-actions"><button class="linkbtn edit-allocation" data-code="${esc(r.loan_code)}">Edit</button><button class="linkbtn clone-allocation" data-code="${esc(r.loan_code)}">Clone</button><button class="linkbtn history-allocation" data-code="${esc(r.loan_code)}">History</button><button class="linkbtn delete-allocation danger" data-code="${esc(r.loan_code)}">Delete</button></div></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No campaign entries saved yet.</div>'}`;
     const header=saved.querySelector('thead tr');if(header){const th=document.createElement('th');th.textContent='Approval';header.insertBefore(th,header.lastElementChild)}

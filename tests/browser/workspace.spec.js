@@ -6,7 +6,7 @@ test('every fund management view renders without browser errors', async ({page})
   await page.goto('/');
   await expect(page.locator('#content .kpis').first()).toBeVisible();
   await expect(page.locator('#systemHealth')).toContainText('Service online');
-  for(const view of ['reconciliation','matching','exposure','receivables','repayment-alerts','profit','portfolio','cash','projection','monitor','reports','statement','allocation','allocation-email','simcopy','data','audit','dashboard']) {
+  for(const view of ['reconciliation','matching','exposure','receivables','repayment-alerts','profit','portfolio','cash','projection','monitor','reports','statement','allocation','email-tracking','allocation-email','simcopy','data','audit','dashboard']) {
     await page.locator(`.nav[data-view="${view}"]`).click();
     await expect(page.locator('#content')).not.toBeEmpty();
   }

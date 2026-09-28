@@ -198,3 +198,14 @@ Python tests compare totals, profit schedules and projections against the origin
 For the storage integration check, start `uv run pywrangler dev --port 8791`, then run `python scripts/check_worker.py`. This signs in using `.dev.vars`, imports the original workbooks into the **local** emulator and checks all Excel exports. It replaces the emulator's current workbook versions, so use test data only. The script only connects to localhost.
 
 References: [Flask on Workers](https://developers.cloudflare.com/workers/languages/python/packages/flask/), [Python packages](https://developers.cloudflare.com/workers/languages/python/packages/), [D1 bindings](https://developers.cloudflare.com/d1/worker-api/).
+
+
+### Allocation Email Monitor
+
+Open **Allocation Email Monitor** to reconcile email follow-up with every successful **Investment Committed** transaction in the current ledger. Notes missing from the simulation remain visible, and transactions without a note reference are flagged for Transaction Matching. Each note shows its ledger allocation dates and total amount, allocation email sent date, disbursement email sent date, and disbursement date from the simulation or campaign entry.
+
+Email dates initially come from the simulation's **Email on Allocation** and **Email on Disbursement** columns. Blank, Nil, or invalid dates remain pending. Enter actual sent dates and select **Save / confirm** after reviewing all allocations for that note. This records an admin confirmation, not mailbox verification. A later change to the note's allocations reopens the coverage review, including same-day top-ups. Clear a date and save to mark that email pending again. Saved dates persist across imports and appear in the simulation preview and generated Excel report; they do not change repayment or disbursement calculations.
+
+Apply database migration `0012_allocation_email_tracking.sql` before deploying this version. Local preview applies migrations automatically on startup.
+
+In **Campaign Entries**, use **Reuse issuer details** to choose an issuer from saved campaigns or the simulation report. This fills the issuer name, company ID, business description, note type and payment type, while leaving new-note amounts, dates, rate and tenure untouched. Saved campaign details take precedence over historical rows. Choose **Other / new issuer** to enter new company details; saving the campaign makes that issuer available in the dropdown. All copied fields remain editable.
