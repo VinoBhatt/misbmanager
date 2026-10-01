@@ -31,8 +31,11 @@ def validate_workbook(kind, data):
             if not {'Sheet1','Sheet2'}.issubset(wb.sheetnames):
                 raise ValueError('Missing MIDAS sheets')
             return
-        if not required.issubset(set(headers)):
-            raise ValueError('Required columns are missing')
+        missing=required-set(headers)
+        if missing:
+            if kind=='transactions' and {'Account No','Amount(MYR)','User Type'}.issubset(set(headers)):
+                raise ValueError('This is a deposit/withdrawal request export, not an account transaction log. Upload the investor transaction-history export with ID, Status, Previous Balance(MYR), Current Balance(MYR) and Sum Involved(MYR).')
+            raise ValueError('Required columns are missing: '+', '.join(sorted(missing)))
         if kind == 'simulation':
             legacy={'Gross Profit','Late Profit','Service Fee ','Net Profit'}
             expanded={'Gross Profit Earned','Total Gross Profit','Late Payment Charges','Service Fee ','SST','Net Profit','Installment'}

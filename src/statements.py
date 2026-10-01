@@ -319,18 +319,25 @@ def register_statement_routes(app):
                 loaded=load_transactions() if source_exists('transactions') else []
                 current=list(getattr(g,'transactions_base',loaded))
                 quality=inspect_workbook('transactions',data,current)
-                if not quality.get('can_import'):
+                overwrite=request.form.get('overwrite') in ('1','true','yes') and quality.get('can_overwrite',False)
+                if not quality.get('can_import') and not overwrite:
                     return jsonify(error='The transaction workbook failed data-quality checks.',
                                    issues=quality.get('issues',[])),422
-                if (quality.get('comparison') or {}).get('requires_acknowledgement'):
+                if ((quality.get('comparison') or {}).get('requires_acknowledgement')
+                        and request.form.get('allow_regression') not in ('1','true','yes')):
                     return jsonify(error='This ledger is older or removes live transactions. Review and import it from Data Sources if that rollback is intentional.',
                                    comparison=quality['comparison']),409
                 result=prepare(data,request.form)
+                if overwrite:
+                    result['warnings'].extend(f"Imported ledger warning: {item['message']} ({item['count']})"
+                                              for item in quality.get('issues',[]) if item['level']=='error')
                 save_source('transactions',data,result['latest_date'],file.filename)
                 g.pop('transactions_base',None);g.pop('transactions_effective',None)
                 load_transactions()
                 save_parsed_source('transactions',source_rows()['transactions']['object_key'],g.transactions_base)
-                audit_event('Imported statement ledger','source','transactions',{'as_of':result['latest_date']})
+                audit_event('Imported statement ledger','source','transactions',{'as_of':result['latest_date'],
+                    'quality_overridden':bool(overwrite),'quality_issues':quality.get('issues',[]) if overwrite else [],
+                    'regression_acknowledged':bool((quality.get('comparison') or {}).get('requires_acknowledgement'))})
                 result['version']=source_rows()['transactions']['object_key']
             else:
                 result=build()

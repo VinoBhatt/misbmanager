@@ -67,6 +67,34 @@ class StatementTests(unittest.TestCase):
                 self.assertEqual(client.get(f'/api/account-statement-runs/{run_id}/pdf').status_code,200)
                 self.assertEqual(client.get('/api/export/account-statement.pdf',query_string=params).headers['X-Statement-History-New'],'0')
 
+    def test_statement_upload_can_overwrite_balance_gaps(self):
+        rows=[list(row) for row in ROWS]
+        rows[-1][3]=902
+        rows[-1][4]=904.34
+        payload=workbook(rows)
+        with tempfile.TemporaryDirectory() as directory:
+            initialize(Path(directory))
+            with patch.dict(os.environ,{'MISB_DATA_DIR':directory,'MISB_LOCAL_PREVIEW':'1'}):
+                client=app.test_client()
+                rejected=client.post('/api/account-statement',data={
+                    'file':(io.BytesIO(payload),'latest.xlsx')})
+                self.assertEqual(rejected.status_code,422)
+                imported=client.post('/api/account-statement',data={
+                    'file':(io.BytesIO(payload),'latest.xlsx'),'overwrite':'1','allow_regression':'1'})
+                self.assertEqual(imported.status_code,200,imported.data)
+                self.assertEqual(imported.json['summary']['ending_balance'],'904.34')
+                self.assertTrue(any('Imported ledger warning' in warning for warning in imported.json['warnings']))
+
+    def test_request_export_explains_wrong_workbook(self):
+        from uploads import inspect_workbook
+        wb=openpyxl.Workbook();ws=wb.active
+        ws.append(['Cofundr Admin Panel'])
+        ws.append(['#','Note ID','Name','User Type','Bank','Account No','Amount(MYR)',
+                   'Transaction No','Transaction Proof','Date','Pay Via','Action'])
+        output=io.BytesIO();wb.save(output);wb.close()
+        with self.assertRaisesRegex(ValueError,'request export, not an account transaction log'):
+            inspect_workbook('transactions',output.getvalue())
+
     def test_user_example_sst_is_eight_percent_of_platform_fee(self):
         result=statement_data(workbook([
             [1,'Profit Payout',78.40,0,78.40,1996,'SUCCESSFUL','02-Sep-2026 12:00:00']]))

@@ -1,0 +1,1007 @@
+{
+  "statement": {
+    "start_date": "2026-09-03",
+    "opening_source": "Last completed transaction before the period",
+    "as_of": "2026-09-30",
+    "latest_date": "2026-10-01",
+    "investor_id": "5490",
+    "investor_name": "Amanahraya Trustees Berhad",
+    "summary": {
+      "starting_balance": "2038351.00",
+      "ending_balance": "664448.11",
+      "total_investment": "2003075.42",
+      "principal_received": "1226500.00",
+      "nett_returns": "55873.53",
+      "total_gross_returns": "71267.25",
+      "service_fee": "14253.45",
+      "sst": "1140.28"
+    },
+    "rows": [
+      {
+        "date": "04-Sep-2026 10:52:45",
+        "description": "Principal Payout",
+        "note": "2026",
+        "previous": "2038351.00",
+        "amount": "132087.50",
+        "current": "2170438.50"
+      },
+      {
+        "date": "04-Sep-2026 10:52:45",
+        "description": "Gross Profit",
+        "note": "2026",
+        "previous": "2170438.50",
+        "amount": "13737.10",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 10:52:45",
+        "description": "Service Charge",
+        "note": "2026",
+        "previous": "",
+        "amount": "-2747.42",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 10:52:45",
+        "description": "SST",
+        "note": "2026",
+        "previous": "",
+        "amount": "-219.79",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 10:52:45",
+        "description": "Net Profit",
+        "note": "2026",
+        "previous": "",
+        "amount": "10769.89",
+        "current": "2181208.39"
+      },
+      {
+        "date": "04-Sep-2026 10:52:45",
+        "description": "Principal Payout",
+        "note": "2026",
+        "previous": "2181208.39",
+        "amount": "117912.50",
+        "current": "2299120.89"
+      },
+      {
+        "date": "04-Sep-2026 10:52:45",
+        "description": "Gross Profit",
+        "note": "2026",
+        "previous": "2299120.89",
+        "amount": "12262.90",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 10:52:45",
+        "description": "Service Charge",
+        "note": "2026",
+        "previous": "",
+        "amount": "-2452.58",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 10:52:45",
+        "description": "SST",
+        "note": "2026",
+        "previous": "",
+        "amount": "-196.21",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 10:52:45",
+        "description": "Net Profit",
+        "note": "2026",
+        "previous": "",
+        "amount": "9614.11",
+        "current": "2308735.00"
+      },
+      {
+        "date": "04-Sep-2026 17:10:08",
+        "description": "Gross Profit",
+        "note": "2082",
+        "previous": "2308735.00",
+        "amount": "1562.50",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 17:10:08",
+        "description": "Service Charge",
+        "note": "2082",
+        "previous": "",
+        "amount": "-312.50",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 17:10:08",
+        "description": "SST",
+        "note": "2082",
+        "previous": "",
+        "amount": "-25.00",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 17:10:08",
+        "description": "Net Profit",
+        "note": "2082",
+        "previous": "",
+        "amount": "1225.00",
+        "current": "2309960.00"
+      },
+      {
+        "date": "04-Sep-2026 17:16:39",
+        "description": "Gross Profit",
+        "note": "2083",
+        "previous": "2309960.00",
+        "amount": "1250.00",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 17:16:39",
+        "description": "Service Charge",
+        "note": "2083",
+        "previous": "",
+        "amount": "-250.00",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 17:16:39",
+        "description": "SST",
+        "note": "2083",
+        "previous": "",
+        "amount": "-20.00",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 17:16:39",
+        "description": "Net Profit",
+        "note": "2083",
+        "previous": "",
+        "amount": "980.00",
+        "current": "2310940.00"
+      },
+      {
+        "date": "04-Sep-2026 17:17:39",
+        "description": "Gross Profit",
+        "note": "2084",
+        "previous": "2310940.00",
+        "amount": "750.00",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 17:17:39",
+        "description": "Service Charge",
+        "note": "2084",
+        "previous": "",
+        "amount": "-150.00",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 17:17:39",
+        "description": "SST",
+        "note": "2084",
+        "previous": "",
+        "amount": "-12.00",
+        "current": ""
+      },
+      {
+        "date": "04-Sep-2026 17:17:39",
+        "description": "Net Profit",
+        "note": "2084",
+        "previous": "",
+        "amount": "588.00",
+        "current": "2311528.00"
+      },
+      {
+        "date": "07-Sep-2026 10:55:35",
+        "description": "Gross Profit",
+        "note": "2085",
+        "previous": "2311528.00",
+        "amount": "1250.00",
+        "current": ""
+      },
+      {
+        "date": "07-Sep-2026 10:55:35",
+        "description": "Service Charge",
+        "note": "2085",
+        "previous": "",
+        "amount": "-250.00",
+        "current": ""
+      },
+      {
+        "date": "07-Sep-2026 10:55:35",
+        "description": "SST",
+        "note": "2085",
+        "previous": "",
+        "amount": "-20.00",
+        "current": ""
+      },
+      {
+        "date": "07-Sep-2026 10:55:35",
+        "description": "Net Profit",
+        "note": "2085",
+        "previous": "",
+        "amount": "980.00",
+        "current": "2312508.00"
+      },
+      {
+        "date": "08-Sep-2026 16:26:47",
+        "description": "Investment Committed",
+        "note": "2104",
+        "previous": "2312508.00",
+        "amount": "60375.42",
+        "current": "2252132.58"
+      },
+      {
+        "date": "10-Sep-2026 16:00:47",
+        "description": "Investment Committed",
+        "note": "2108",
+        "previous": "2252132.58",
+        "amount": "106500.00",
+        "current": "2145632.58"
+      },
+      {
+        "date": "10-Sep-2026 16:01:22",
+        "description": "Investment Committed",
+        "note": "2107",
+        "previous": "2145632.58",
+        "amount": "112200.00",
+        "current": "2033432.58"
+      },
+      {
+        "date": "10-Sep-2026 16:02:04",
+        "description": "Investment Committed",
+        "note": "2106",
+        "previous": "2033432.58",
+        "amount": "187000.00",
+        "current": "1846432.58"
+      },
+      {
+        "date": "11-Sep-2026 12:05:42",
+        "description": "Gross Profit",
+        "note": "2088",
+        "previous": "1846432.58",
+        "amount": "1156.25",
+        "current": ""
+      },
+      {
+        "date": "11-Sep-2026 12:05:42",
+        "description": "Service Charge",
+        "note": "2088",
+        "previous": "",
+        "amount": "-231.25",
+        "current": ""
+      },
+      {
+        "date": "11-Sep-2026 12:05:42",
+        "description": "SST",
+        "note": "2088",
+        "previous": "",
+        "amount": "-18.50",
+        "current": ""
+      },
+      {
+        "date": "11-Sep-2026 12:05:42",
+        "description": "Net Profit",
+        "note": "2088",
+        "previous": "",
+        "amount": "906.50",
+        "current": "1847339.08"
+      },
+      {
+        "date": "11-Sep-2026 12:15:07",
+        "description": "Principal Payout",
+        "note": "2016",
+        "previous": "1847339.08",
+        "amount": "125000.00",
+        "current": "1972339.08"
+      },
+      {
+        "date": "11-Sep-2026 12:15:07",
+        "description": "Gross Profit",
+        "note": "2016",
+        "previous": "1972339.08",
+        "amount": "12000.00",
+        "current": ""
+      },
+      {
+        "date": "11-Sep-2026 12:15:07",
+        "description": "Service Charge",
+        "note": "2016",
+        "previous": "",
+        "amount": "-2400.00",
+        "current": ""
+      },
+      {
+        "date": "11-Sep-2026 12:15:07",
+        "description": "SST",
+        "note": "2016",
+        "previous": "",
+        "amount": "-192.00",
+        "current": ""
+      },
+      {
+        "date": "11-Sep-2026 12:15:07",
+        "description": "Net Profit",
+        "note": "2016",
+        "previous": "",
+        "amount": "9408.00",
+        "current": "1981747.08"
+      },
+      {
+        "date": "14-Sep-2026 11:02:39",
+        "description": "Gross Profit",
+        "note": "2070",
+        "previous": "1981747.08",
+        "amount": "4500.00",
+        "current": ""
+      },
+      {
+        "date": "14-Sep-2026 11:02:39",
+        "description": "Service Charge",
+        "note": "2070",
+        "previous": "",
+        "amount": "-900.00",
+        "current": ""
+      },
+      {
+        "date": "14-Sep-2026 11:02:39",
+        "description": "SST",
+        "note": "2070",
+        "previous": "",
+        "amount": "-72.00",
+        "current": ""
+      },
+      {
+        "date": "14-Sep-2026 11:02:39",
+        "description": "Net Profit",
+        "note": "2070",
+        "previous": "",
+        "amount": "3528.00",
+        "current": "1985275.08"
+      },
+      {
+        "date": "14-Sep-2026 12:01:16",
+        "description": "Investment Committed",
+        "note": "2110",
+        "previous": "1985275.08",
+        "amount": "65000.00",
+        "current": "1920275.08"
+      },
+      {
+        "date": "14-Sep-2026 16:05:54",
+        "description": "Investment Committed",
+        "note": "2111",
+        "previous": "1920275.08",
+        "amount": "107000.00",
+        "current": "1813275.08"
+      },
+      {
+        "date": "15-Sep-2026 12:03:41",
+        "description": "Principal Payout",
+        "note": "2090",
+        "previous": "1813275.08",
+        "amount": "68000.00",
+        "current": "1881275.08"
+      },
+      {
+        "date": "15-Sep-2026 12:03:41",
+        "description": "Gross Profit",
+        "note": "2090",
+        "previous": "1881275.08",
+        "amount": "815.99",
+        "current": ""
+      },
+      {
+        "date": "15-Sep-2026 12:03:41",
+        "description": "Service Charge",
+        "note": "2090",
+        "previous": "",
+        "amount": "-163.20",
+        "current": ""
+      },
+      {
+        "date": "15-Sep-2026 12:03:41",
+        "description": "SST",
+        "note": "2090",
+        "previous": "",
+        "amount": "-13.06",
+        "current": ""
+      },
+      {
+        "date": "15-Sep-2026 12:03:41",
+        "description": "Net Profit",
+        "note": "2090",
+        "previous": "",
+        "amount": "639.74",
+        "current": "1881914.82"
+      },
+      {
+        "date": "17-Sep-2026 17:06:27",
+        "description": "Investment Committed",
+        "note": "2113",
+        "previous": "1881914.82",
+        "amount": "193000.00",
+        "current": "1688914.82"
+      },
+      {
+        "date": "21-Sep-2026 11:51:48",
+        "description": "Gross Profit",
+        "note": "2092",
+        "previous": "1688914.82",
+        "amount": "585.00",
+        "current": ""
+      },
+      {
+        "date": "21-Sep-2026 11:51:48",
+        "description": "Service Charge",
+        "note": "2092",
+        "previous": "",
+        "amount": "-117.00",
+        "current": ""
+      },
+      {
+        "date": "21-Sep-2026 11:51:48",
+        "description": "SST",
+        "note": "2092",
+        "previous": "",
+        "amount": "-9.36",
+        "current": ""
+      },
+      {
+        "date": "21-Sep-2026 11:51:48",
+        "description": "Net Profit",
+        "note": "2092",
+        "previous": "",
+        "amount": "458.64",
+        "current": "1689373.46"
+      },
+      {
+        "date": "22-Sep-2026 16:04:58",
+        "description": "Investment Committed",
+        "note": "2116",
+        "previous": "1036172.46",
+        "amount": "105000.00",
+        "current": "931172.46"
+      },
+      {
+        "date": "22-Sep-2026 16:55:08",
+        "description": "Withdrawal",
+        "note": "0",
+        "previous": "1584373.46",
+        "amount": "653200.00",
+        "current": "931173.46"
+      },
+      {
+        "date": "22-Sep-2026 16:55:08",
+        "description": "Withdrawal Fee",
+        "note": "-",
+        "previous": "931173.46",
+        "amount": "1.00",
+        "current": "931172.46"
+      },
+      {
+        "date": "23-Sep-2026 16:46:34",
+        "description": "Investment Committed",
+        "note": "2117",
+        "previous": "931172.46",
+        "amount": "167000.00",
+        "current": "764172.46"
+      },
+      {
+        "date": "24-Sep-2026 11:24:58",
+        "description": "Principal Payout",
+        "note": "2019",
+        "previous": "764172.46",
+        "amount": "125000.00",
+        "current": "889172.46"
+      },
+      {
+        "date": "24-Sep-2026 11:24:58",
+        "description": "Gross Profit",
+        "note": "2019",
+        "previous": "889172.46",
+        "amount": "12000.00",
+        "current": ""
+      },
+      {
+        "date": "24-Sep-2026 11:24:58",
+        "description": "Service Charge",
+        "note": "2019",
+        "previous": "",
+        "amount": "-2400.00",
+        "current": ""
+      },
+      {
+        "date": "24-Sep-2026 11:24:58",
+        "description": "SST",
+        "note": "2019",
+        "previous": "",
+        "amount": "-192.00",
+        "current": ""
+      },
+      {
+        "date": "24-Sep-2026 11:24:58",
+        "description": "Net Profit",
+        "note": "2019",
+        "previous": "",
+        "amount": "9408.00",
+        "current": "898580.46"
+      },
+      {
+        "date": "24-Sep-2026 11:33:04",
+        "description": "Gross Profit",
+        "note": "2093",
+        "previous": "898580.46",
+        "amount": "1250.00",
+        "current": ""
+      },
+      {
+        "date": "24-Sep-2026 11:33:04",
+        "description": "Service Charge",
+        "note": "2093",
+        "previous": "",
+        "amount": "-250.00",
+        "current": ""
+      },
+      {
+        "date": "24-Sep-2026 11:33:04",
+        "description": "SST",
+        "note": "2093",
+        "previous": "",
+        "amount": "-20.00",
+        "current": ""
+      },
+      {
+        "date": "24-Sep-2026 11:33:04",
+        "description": "Net Profit",
+        "note": "2093",
+        "previous": "",
+        "amount": "980.00",
+        "current": "899560.46"
+      },
+      {
+        "date": "28-Sep-2026 10:59:25",
+        "description": "Gross Profit",
+        "note": "2074",
+        "previous": "899560.46",
+        "amount": "1000.00",
+        "current": ""
+      },
+      {
+        "date": "28-Sep-2026 10:59:25",
+        "description": "Service Charge",
+        "note": "2074",
+        "previous": "",
+        "amount": "-200.00",
+        "current": ""
+      },
+      {
+        "date": "28-Sep-2026 10:59:25",
+        "description": "SST",
+        "note": "2074",
+        "previous": "",
+        "amount": "-16.00",
+        "current": ""
+      },
+      {
+        "date": "28-Sep-2026 10:59:25",
+        "description": "Net Profit",
+        "note": "2074",
+        "previous": "",
+        "amount": "784.00",
+        "current": "900344.46"
+      },
+      {
+        "date": "28-Sep-2026 11:00:59",
+        "description": "Gross Profit",
+        "note": "2076",
+        "previous": "900344.46",
+        "amount": "1043.75",
+        "current": ""
+      },
+      {
+        "date": "28-Sep-2026 11:00:59",
+        "description": "Service Charge",
+        "note": "2076",
+        "previous": "",
+        "amount": "-208.75",
+        "current": ""
+      },
+      {
+        "date": "28-Sep-2026 11:00:59",
+        "description": "SST",
+        "note": "2076",
+        "previous": "",
+        "amount": "-16.70",
+        "current": ""
+      },
+      {
+        "date": "28-Sep-2026 11:00:59",
+        "description": "Net Profit",
+        "note": "2076",
+        "previous": "",
+        "amount": "818.30",
+        "current": "901162.76"
+      },
+      {
+        "date": "28-Sep-2026 11:03:40",
+        "description": "Gross Profit",
+        "note": "2077",
+        "previous": "901162.76",
+        "amount": "1000.00",
+        "current": ""
+      },
+      {
+        "date": "28-Sep-2026 11:03:40",
+        "description": "Service Charge",
+        "note": "2077",
+        "previous": "",
+        "amount": "-200.00",
+        "current": ""
+      },
+      {
+        "date": "28-Sep-2026 11:03:40",
+        "description": "SST",
+        "note": "2077",
+        "previous": "",
+        "amount": "-16.00",
+        "current": ""
+      },
+      {
+        "date": "28-Sep-2026 11:03:40",
+        "description": "Net Profit",
+        "note": "2077",
+        "previous": "",
+        "amount": "784.00",
+        "current": "901946.76"
+      },
+      {
+        "date": "28-Sep-2026 16:00:21",
+        "description": "Investment Committed",
+        "note": "2118",
+        "previous": "901946.76",
+        "amount": "900000.00",
+        "current": "1946.76"
+      },
+      {
+        "date": "29-Sep-2026 11:15:56",
+        "description": "Gross Profit",
+        "note": "2079",
+        "previous": "1946.76",
+        "amount": "1000.00",
+        "current": ""
+      },
+      {
+        "date": "29-Sep-2026 11:15:56",
+        "description": "Service Charge",
+        "note": "2079",
+        "previous": "",
+        "amount": "-200.00",
+        "current": ""
+      },
+      {
+        "date": "29-Sep-2026 11:15:56",
+        "description": "SST",
+        "note": "2079",
+        "previous": "",
+        "amount": "-16.00",
+        "current": ""
+      },
+      {
+        "date": "29-Sep-2026 11:15:56",
+        "description": "Net Profit",
+        "note": "2079",
+        "previous": "",
+        "amount": "784.00",
+        "current": "2730.76"
+      },
+      {
+        "date": "30-Sep-2026 12:58:44",
+        "description": "Principal Payout",
+        "note": "2065",
+        "previous": "2730.76",
+        "amount": "110000.00",
+        "current": "112730.76"
+      },
+      {
+        "date": "30-Sep-2026 12:58:44",
+        "description": "Gross Profit",
+        "note": "2065",
+        "previous": "112730.76",
+        "amount": "1430.00",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 12:58:44",
+        "description": "Service Charge",
+        "note": "2065",
+        "previous": "",
+        "amount": "-286.00",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 12:58:44",
+        "description": "SST",
+        "note": "2065",
+        "previous": "",
+        "amount": "-22.88",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 12:58:44",
+        "description": "Net Profit",
+        "note": "2065",
+        "previous": "",
+        "amount": "1121.12",
+        "current": "113851.88"
+      },
+      {
+        "date": "30-Sep-2026 17:44:40",
+        "description": "Principal Payout",
+        "note": "2074",
+        "previous": "113851.88",
+        "amount": "80000.00",
+        "current": "193851.88"
+      },
+      {
+        "date": "30-Sep-2026 17:44:40",
+        "description": "Gross Profit",
+        "note": "2074",
+        "previous": "193851.88",
+        "amount": "66.67",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:44:40",
+        "description": "Service Charge",
+        "note": "2074",
+        "previous": "",
+        "amount": "-13.33",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:44:40",
+        "description": "SST",
+        "note": "2074",
+        "previous": "",
+        "amount": "-1.07",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:44:40",
+        "description": "Net Profit",
+        "note": "2074",
+        "previous": "",
+        "amount": "52.27",
+        "current": "193904.15"
+      },
+      {
+        "date": "30-Sep-2026 17:50:02",
+        "description": "Principal Payout",
+        "note": "2076",
+        "previous": "193904.15",
+        "amount": "83500.00",
+        "current": "277404.15"
+      },
+      {
+        "date": "30-Sep-2026 17:50:02",
+        "description": "Gross Profit",
+        "note": "2076",
+        "previous": "277404.15",
+        "amount": "69.59",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:50:02",
+        "description": "Service Charge",
+        "note": "2076",
+        "previous": "",
+        "amount": "-13.92",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:50:02",
+        "description": "SST",
+        "note": "2076",
+        "previous": "",
+        "amount": "-1.11",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:50:02",
+        "description": "Net Profit",
+        "note": "2076",
+        "previous": "",
+        "amount": "54.56",
+        "current": "277458.71"
+      },
+      {
+        "date": "30-Sep-2026 17:53:05",
+        "description": "Principal Payout",
+        "note": "2077",
+        "previous": "277458.71",
+        "amount": "80000.00",
+        "current": "357458.71"
+      },
+      {
+        "date": "30-Sep-2026 17:53:05",
+        "description": "Gross Profit",
+        "note": "2077",
+        "previous": "357458.71",
+        "amount": "66.67",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:53:05",
+        "description": "Service Charge",
+        "note": "2077",
+        "previous": "",
+        "amount": "-13.33",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:53:05",
+        "description": "SST",
+        "note": "2077",
+        "previous": "",
+        "amount": "-1.07",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:53:05",
+        "description": "Net Profit",
+        "note": "2077",
+        "previous": "",
+        "amount": "52.27",
+        "current": "357510.98"
+      },
+      {
+        "date": "30-Sep-2026 17:56:29",
+        "description": "Principal Payout",
+        "note": "2079",
+        "previous": "357510.98",
+        "amount": "80000.00",
+        "current": "437510.98"
+      },
+      {
+        "date": "30-Sep-2026 17:56:29",
+        "description": "Gross Profit",
+        "note": "2079",
+        "previous": "437510.98",
+        "amount": "33.33",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:56:29",
+        "description": "Service Charge",
+        "note": "2079",
+        "previous": "",
+        "amount": "-6.67",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:56:29",
+        "description": "SST",
+        "note": "2079",
+        "previous": "",
+        "amount": "-0.53",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:56:29",
+        "description": "Net Profit",
+        "note": "2079",
+        "previous": "",
+        "amount": "26.13",
+        "current": "437537.11"
+      },
+      {
+        "date": "30-Sep-2026 17:59:46",
+        "description": "Principal Payout",
+        "note": "2082",
+        "previous": "437537.11",
+        "amount": "125000.00",
+        "current": "562537.11"
+      },
+      {
+        "date": "30-Sep-2026 17:59:46",
+        "description": "Gross Profit",
+        "note": "2082",
+        "previous": "562537.11",
+        "amount": "1354.17",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:59:46",
+        "description": "Service Charge",
+        "note": "2082",
+        "previous": "",
+        "amount": "-270.83",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:59:46",
+        "description": "SST",
+        "note": "2082",
+        "previous": "",
+        "amount": "-21.67",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 17:59:46",
+        "description": "Net Profit",
+        "note": "2082",
+        "previous": "",
+        "amount": "1061.67",
+        "current": "563598.78"
+      },
+      {
+        "date": "30-Sep-2026 18:05:13",
+        "description": "Principal Payout",
+        "note": "2083",
+        "previous": "563598.78",
+        "amount": "100000.00",
+        "current": "663598.78"
+      },
+      {
+        "date": "30-Sep-2026 18:05:13",
+        "description": "Gross Profit",
+        "note": "2083",
+        "previous": "663598.78",
+        "amount": "1083.33",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 18:05:13",
+        "description": "Service Charge",
+        "note": "2083",
+        "previous": "",
+        "amount": "-216.67",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 18:05:13",
+        "description": "SST",
+        "note": "2083",
+        "previous": "",
+        "amount": "-17.33",
+        "current": ""
+      },
+      {
+        "date": "30-Sep-2026 18:05:13",
+        "description": "Net Profit",
+        "note": "2083",
+        "previous": "",
+        "amount": "849.33",
+        "current": "664448.11"
+      }
+    ],
+    "row_count": 120,
+    "page_count": 3,
+    "warnings": [
+      "2 balance discontinuity/discontinuities found. The PDF preserves the original ledger balances; check that the log is complete."
+    ]
+  },
+  "balance_gaps": [
+    {
+      "previous_id": 291278,
+      "previous_date": "21-Sep-2026 11:51:48",
+      "previous_closing": "1689373.46",
+      "next_id": 291305,
+      "next_date": "22-Sep-2026 16:04:58",
+      "next_opening": "1036172.46",
+      "difference": "-653201.00"
+    },
+    {
+      "previous_id": 291305,
+      "previous_date": "22-Sep-2026 16:04:58",
+      "previous_closing": "931172.46",
+      "next_id": 291324,
+      "next_date": "22-Sep-2026 16:55:08",
+      "next_opening": "1584373.46",
+      "difference": "653201.00"
+    }
+  ]
+}
