@@ -196,6 +196,10 @@ def inspect_workbook(kind, data, current=None):
         if not issues: issue('ok','No blocking data-quality issues found',0)
         result={'kind':kind,'stats':stats,'issues':issues,
                 'can_import':not any(item['level']=='error' for item in issues)}
+        overrideable={'Ledger balance is not continuous between transactions',
+                      'Transaction amount does not match its balance movement'}
+        errors=[item for item in issues if item['level']=='error']
+        result['can_overwrite']=kind=='transactions' and bool(errors) and all(item['message'] in overrideable for item in errors)
         if source_comparison is not None: result['comparison']=source_comparison
         return result
     finally:

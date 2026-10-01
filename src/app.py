@@ -803,7 +803,8 @@ def upload(kind):
         elif kind=='simulation':
             current=list(load_simulation()[0])
         quality=inspect_workbook(kind,data,current)
-        if not quality.get('can_import'):
+        overwrite=request.form.get('overwrite') in ('1','true','yes') and quality.get('can_overwrite',False)
+        if not quality.get('can_import') and not overwrite:
             return jsonify({'error':'Workbook failed data-quality checks. Validate it to review the issues.',
                             'issues':quality.get('issues',[]),'stats':quality.get('stats',{})}),422
         comparison=quality.get('comparison') or {};allow_regression=request.form.get('allow_regression') in ('1','true','yes')
@@ -828,7 +829,7 @@ def upload(kind):
     current=source_rows()[kind]
     save_parsed_source(kind,current['object_key'],parsed)
     audit_event('Imported workbook','source',kind,{'as_of':as_of,'object_key':current['object_key'],
-        'backup':backup or '','regression_acknowledged':bool((quality.get('comparison') or {}).get('requires_acknowledgement'))})
+        'backup':backup or '','quality_overridden':bool(overwrite),'quality_issues':quality.get('issues',[]) if overwrite else [],'regression_acknowledged':bool((quality.get('comparison') or {}).get('requires_acknowledgement'))})
     return jsonify({'ok':True,'backup':backup or 'First import; no previous version','validation':quality})
 
 

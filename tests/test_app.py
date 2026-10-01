@@ -322,6 +322,12 @@ class WebsiteTests(unittest.TestCase):
             data={'file':(io.BytesIO(payload),'broken-balances.xlsx')})
         self.assertEqual(direct.status_code,422,direct.data)
         self.assertEqual(self.client.get('/api/data').json['summary'],before['summary'])
+        self.assertTrue(rejected.json['can_overwrite'])
+        overwritten=self.client.post('/api/upload/transactions',data={
+            'file':(io.BytesIO(payload),'latest-balances.xlsx'),'overwrite':'1','allow_regression':'1'})
+        self.assertEqual(overwritten.status_code,200,overwritten.data)
+        self.assertTrue(overwritten.json['validation']['can_overwrite'])
+        self.assertTrue(any(row['details'].get('quality_overridden') for row in self.client.get('/api/audit-events').json))
 
     def test_source_regression_requires_explicit_acknowledgement(self):
         workbook=openpyxl.load_workbook(self.seed/'transactions.xlsx');sheet=workbook[workbook.sheetnames[0]]
