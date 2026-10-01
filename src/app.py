@@ -1001,11 +1001,11 @@ def simulation_update_snapshot(as_of=None, include_drafts=False, compare_to=None
             service_fee=max(0,gross_profit*.2)
         elif completed:
             expected_net=paid_profit;unpaid_profit=0.0
-            gross_profit=(expected_net/0.8 if expected_net else original_gross)
-            service_fee=max(0,gross_profit-expected_net)
+            gross_profit=((expected_net+sst)/0.8 if expected_net else original_gross)
+            service_fee=max(0,gross_profit*.2)
         else:
-            gross_profit=original_gross;service_fee=max(0,num(r.get('service_fee')))
-            expected_net=max(0,gross_profit-service_fee-sst) if expanded else original_net
+            gross_profit=original_gross;service_fee=max(0,gross_profit*.2)
+            expected_net=max(0,gross_profit-service_fee-sst)
             unpaid_profit=max(0,expected_net-paid_profit)
         updates[code]={
             '_expanded':expanded,
@@ -1097,11 +1097,11 @@ def simulation_update_snapshot(as_of=None, include_drafts=False, compare_to=None
             gross_earned=gross_profit if early else max(0,num(synthetic['gross_profit_earned']))
             late_charge=0 if early else max(0,gross_profit-gross_earned);service_fee=max(0,gross_profit*.2);unpaid_profit=0
         elif completed:
-            expected_net=paid_profit;gross_profit=expected_net/.8 if expected_net else original_gross
-            gross_earned=max(0,num(synthetic['gross_profit_earned']));late_charge=0;service_fee=max(0,gross_profit-expected_net);unpaid_profit=0
+            expected_net=paid_profit;gross_profit=(expected_net+sst)/.8 if expected_net else original_gross
+            gross_earned=max(0,num(synthetic['gross_profit_earned']));late_charge=0;service_fee=max(0,gross_profit*.2);unpaid_profit=0
         else:
             gross_profit=original_gross;gross_earned=max(0,num(synthetic['gross_profit_earned']));late_charge=0
-            service_fee=max(0,num(synthetic['service_fee']));expected_net=max(0,gross_profit-service_fee-sst) if expanded else original_net
+            service_fee=max(0,gross_profit*.2);expected_net=max(0,gross_profit-service_fee-sst)
             unpaid_profit=max(0,expected_net-paid_profit)
         updates[code]={'_expanded':expanded,'Loan Status':'Completed' if completed else synthetic['loan_status'],
             'Actual Repayment **':paid_principal+paid_profit,'Paid Principal':paid_principal,'Unpaid Principal':max(0,inv-paid_principal),
@@ -1210,8 +1210,10 @@ def build_updated_simulation_workbook(as_of=None, snap=None):
         if not up: continue
         # Inputs sourced from the ledger. Derived cells retain the template's formula-driven style.
         input_fields=['Loan Status','Paid Principal','Paid Profit','Late Profit','Early Repayment','Early Repayment Date']
-        if up.get('_expanded') and up.get('Loan Status')=='Completed':
-            input_fields+=['Gross Profit Earned','Late Payment Charges','SST']
+        input_fields.append('SST')
+        if up.get('_expanded'):
+            if up.get('Loan Status')=='Completed':
+                input_fields+=['Gross Profit Earned','Late Payment Charges']
         input_fields += [h for h in ('Email on Allocation','Email on Disbursement') if h in up]
         for h in input_fields:
             if h not in hidx: continue
@@ -1219,6 +1221,10 @@ def build_updated_simulation_workbook(as_of=None, snap=None):
             if h=='Early Repayment Date' and v:
                 v=parse_date(v)
             ws.cell(row,hidx[h]).value=v
+        if not up.get('_expanded'):
+            if 'Net Profit' in hidx: ws.cell(row,hidx['Net Profit']).value=up['Net Profit']
+            if up.get('Loan Status')=='Completed' and 'Gross Profit' in hidx:
+                ws.cell(row,hidx['Gross Profit']).value=up['Gross Profit']
         # When a note is completed early, its expected profit itself changes to the realised pro-rated amount.
         if up.get('Early Repayment') and up.get('Loan Status')=='Completed':
             if 'Gross Profit' in hidx: ws.cell(row,hidx['Gross Profit']).value=up['Gross Profit']
@@ -1233,7 +1239,7 @@ def build_updated_simulation_workbook(as_of=None, snap=None):
         if 'Service Fee ' in hidx and 'Total Gross Profit' in hidx:
             ws.cell(row,hidx['Service Fee ']).value=f'={openpyxl.utils.get_column_letter(hidx["Total Gross Profit"])}{row}*20%'
         elif 'Service Fee ' in hidx and 'Gross Profit' in hidx and 'Net Profit' in hidx:
-            ws.cell(row,hidx['Service Fee ']).value=f'={openpyxl.utils.get_column_letter(hidx["Gross Profit"])}{row}-{openpyxl.utils.get_column_letter(hidx["Net Profit"])}{row}'
+            ws.cell(row,hidx['Service Fee ']).value=f'={openpyxl.utils.get_column_letter(hidx["Gross Profit"])}{row}*20%'
         if 'Net Profit' in hidx and 'Total Gross Profit' in hidx and 'Service Fee ' in hidx and 'SST' in hidx:
             ws.cell(row,hidx['Net Profit']).value=f'={openpyxl.utils.get_column_letter(hidx["Total Gross Profit"])}{row}-{openpyxl.utils.get_column_letter(hidx["Service Fee "])}{row}-{openpyxl.utils.get_column_letter(hidx["SST"])}{row}'
     from allocations import allocation_map, row_values

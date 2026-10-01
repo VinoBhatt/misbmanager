@@ -287,18 +287,18 @@ def save_statement_report_run(as_of, source_object_key, filename, metrics):
     con=connect()
     try:
         existing=[dict(row) for row in con.execute('''SELECT id,created_at FROM statement_report_runs
-            WHERE as_of=? AND source_object_key=? ORDER BY id DESC LIMIT 1''',(as_of,source_object_key))]
+            WHERE as_of=? AND source_object_key=? AND start_date=? ORDER BY id DESC LIMIT 1''',(as_of,source_object_key,metrics.get('start_date','')))]
         if existing:
             return {**existing[0],'created':False}
         con.execute('''INSERT INTO statement_report_runs(
-            as_of,source_object_key,filename,row_count,page_count,opening_balance,closing_balance,gross_returns
-        ) VALUES(?,?,?,?,?,?,?,?)''',(
+            as_of,source_object_key,filename,row_count,page_count,opening_balance,closing_balance,gross_returns,start_date
+        ) VALUES(?,?,?,?,?,?,?,?,?)''',(
             as_of,source_object_key,filename,int(metrics.get('row_count',0)),int(metrics.get('page_count',0)),
             float(metrics.get('opening_balance',0)),float(metrics.get('closing_balance',0)),
-            float(metrics.get('gross_returns',0))))
+            float(metrics.get('gross_returns',0)),metrics.get('start_date','')))
         con.commit()
         saved=[dict(row) for row in con.execute('''SELECT id,created_at FROM statement_report_runs
-            WHERE as_of=? AND source_object_key=? ORDER BY id DESC LIMIT 1''',(as_of,source_object_key))]
+            WHERE as_of=? AND source_object_key=? AND start_date=? ORDER BY id DESC LIMIT 1''',(as_of,source_object_key,metrics.get('start_date','')))]
         return {**saved[0],'created':True}
     finally:
         con.close()
@@ -307,7 +307,7 @@ def save_statement_report_run(as_of, source_object_key, filename, metrics):
 def statement_report_runs(limit=20):
     con=connect()
     try:
-        rows=[dict(row) for row in con.execute('''SELECT r.id,r.as_of,r.source_object_key,r.filename,
+        rows=[dict(row) for row in con.execute('''SELECT r.id,r.as_of,r.start_date,r.source_object_key,r.filename,
             r.row_count,r.page_count,r.opening_balance,r.closing_balance,r.gross_returns,r.created_at,
             COALESCE(m.filename,'') AS source_filename,COALESCE(v.sha256,'') AS source_sha256,
             COALESCE(v.byte_size,0) AS source_byte_size,
@@ -333,7 +333,7 @@ def statement_report_runs(limit=20):
 def statement_report_run(run_id):
     con=connect()
     try:
-        rows=[dict(row) for row in con.execute('''SELECT r.id,r.as_of,r.source_object_key,r.filename,
+        rows=[dict(row) for row in con.execute('''SELECT r.id,r.as_of,r.start_date,r.source_object_key,r.filename,
             r.row_count,r.page_count,r.opening_balance,r.closing_balance,r.gross_returns,r.created_at,
             COALESCE(m.filename,'') AS source_filename,COALESCE(v.sha256,'') AS source_sha256,
             COALESCE(v.byte_size,0) AS source_byte_size,

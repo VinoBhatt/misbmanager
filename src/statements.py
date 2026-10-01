@@ -2,7 +2,7 @@
 import io
 import csv
 from zipfile import BadZipFile
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import openpyxl
 
@@ -40,14 +40,15 @@ def profit_components(net_amount, transaction_date):
     """Split a net profit payout using the SST rules effective on its transaction date."""
     net = money(net_amount)
     taxable = transaction_date >= SST_START
-    divisor = Decimal('0.784') if taxable else Decimal('0.80')
+    # RM100 gross - RM20 platform fee - (RM20 * 8%) SST = RM78.40 net.
+    divisor = Decimal(1) - SERVICE_RATE * (Decimal(1) + (SST_RATE if taxable else Decimal(0)))
     gross = (net / divisor).quantize(CENT, rounding=ROUND_HALF_UP)
     service = (gross * SERVICE_RATE).quantize(CENT, rounding=ROUND_HALF_UP)
     sst = (service * SST_RATE).quantize(CENT, rounding=ROUND_HALF_UP) if taxable else Decimal(0)
     return gross, service, sst
 
 
-def statement_data(data, as_of=None):
+def statement_data(data, as_of=None, start_date=None, opening_balance=None):
     wb = openpyxl.load_workbook(io.BytesIO(data),data_only=True,read_only=True)
     transactions = []
     try:
@@ -102,11 +103,35 @@ def statement_data(data, as_of=None):
         rows.append(r)
     if not rows:
         raise ValueError('No completed cash transactions exist on or before this cut-off date')
+    opening_source = 'First transaction previous balance'
+    if start_date:
+        try:
+            start = date.fromisoformat(start_date)
+        except (ValueError, TypeError):
+            raise ValueError('Start date must be YYYY-MM-DD') from None
+        if start > cutoff:
+            raise ValueError('Start date must be on or before the cut-off date')
+        prior = [r for r in rows if r['timestamp'].date() < start]
+        rows = [r for r in rows if r['timestamp'].date() >= start]
+        if opening_balance is not None:
+            opening = money(opening_balance)
+            opening_source = 'Previous statement closing balance'
+        elif prior:
+            opening = prior[-1]['current']
+            opening_source = 'Last completed transaction before the period'
+        elif rows:
+            opening = rows[0]['previous']
+        else:
+            raise ValueError('No opening balance is available for this period')
+        if rows and rows[0]['previous'] != opening:
+            raise ValueError('The first transaction opening balance does not match the previous closing balance. Check the transaction log for missing entries.')
+    else:
+        opening = rows[0]['previous']
     breaks = sum(a['current'] != b['previous'] for a,b in zip(rows,rows[1:]))
     if breaks:
         warnings.append(f'{breaks} balance discontinuity/discontinuities found. The PDF preserves the original ledger balances; check that the log is complete.')
     totals = {
-        'starting_balance':rows[0]['previous'],'ending_balance':rows[-1]['current'],
+        'starting_balance':opening,'ending_balance':rows[-1]['current'] if rows else opening,
         'total_investment':sum((r['amount'] for r in rows if r['description']=='Investment Committed'),Decimal(0)),
         'principal_received':sum((r['amount'] for r in rows if r['description']=='Principal Payout'),Decimal(0)),
         'nett_returns':sum((r['amount'] for r in rows if r['description']=='Profit Payout'),Decimal(0))}
@@ -131,7 +156,7 @@ def statement_data(data, as_of=None):
     totals.update(total_gross_returns=gross_total, service_fee=service_total, sst=sst_total)
     def value(amount):
         return '' if amount is None else format(amount,'.2f')
-    return {'as_of':cutoff.isoformat(),'latest_date':transactions[-1]['timestamp'].date().isoformat(),
+    return {'start_date':start_date or '', 'opening_source':opening_source, 'as_of':cutoff.isoformat(),'latest_date':transactions[-1]['timestamp'].date().isoformat(),
         'investor_id':'5490','investor_name':'Amanahraya Trustees Berhad',
         'summary':{k:format(v,'.2f') for k,v in totals.items()},
         'rows':[{'date':r['timestamp'].strftime('%d-%b-%Y %H:%M:%S'),'description':r['description'],
@@ -198,6 +223,8 @@ def statement_pdf(statement):
 
     cutoff=date.fromisoformat(statement['as_of'])
     title=f'ACCOUNT STATEMENT (YEAR TO DAY- {cutoff.day} {MONTHS[cutoff.month-1]} {cutoff:%y})'
+    if statement.get('start_date'):
+        title=f'ACCOUNT STATEMENT ({statement["start_date"]} TO {statement["as_of"]})'
     first_ops=text(title,302.5,190.8,11.4,'/T2','center')
     for key,y in zip(('starting_balance','ending_balance','total_investment','principal_received','total_gross_returns'),(261.96,273.60,285.24,296.88,308.52)):
         first_ops+=text(format(Decimal(statement['summary'][key]),',.2f'),312.95,y,7.56,font='/F1',align='right')
@@ -246,13 +273,37 @@ def register_statement_routes(app):
                          save_parsed_source, audit_event)
     from uploads import inspect_workbook
 
+    def prepare(data, params):
+        cutoff = params.get('as_of')
+        if params.get('mode') != 'monthly':
+            return statement_data(data, cutoff)
+        from storage import statement_report_runs
+        full = statement_data(data, cutoff)
+        end = full['as_of']
+        start = params.get('start_date')
+        previous = sorted((r for r in statement_report_runs(500) if r['as_of'] < (start or end)),
+                          key=lambda r: (r['as_of'], r['id']), reverse=True)
+        opening = None
+        if not start:
+            if previous:
+                start = (date.fromisoformat(previous[0]['as_of']) + timedelta(days=1)).isoformat()
+                opening = previous[0]['closing_balance']
+            else:
+                anchor = '2026-09-02'
+                start = '2026-09-03' if end > anchor else end[:8] + '01'
+        elif previous and (date.fromisoformat(previous[0]['as_of']) + timedelta(days=1)).isoformat() == start:
+            opening = previous[0]['closing_balance']
+        result = statement_data(data, end, start, opening)
+        result['mode'] = 'monthly'
+        return result
+
     def build():
         if not source_exists('transactions'):
             raise ValueError('Upload a transaction log first')
         expected=request.args.get('version')
         if expected and expected!=source_rows()['transactions']['object_key']:
             return None
-        result=statement_data(read_source('transactions').read(),request.args.get('as_of'))
+        result=prepare(read_source('transactions').read(),request.args)
         result['version']=source_rows()['transactions']['object_key']
         return result
 
@@ -274,7 +325,7 @@ def register_statement_routes(app):
                 if (quality.get('comparison') or {}).get('requires_acknowledgement'):
                     return jsonify(error='This ledger is older or removes live transactions. Review and import it from Data Sources if that rollback is intentional.',
                                    comparison=quality['comparison']),409
-                result=statement_data(data,request.form.get('as_of'))
+                result=prepare(data,request.form)
                 save_source('transactions',data,result['latest_date'],file.filename)
                 g.pop('transactions_base',None);g.pop('transactions_effective',None)
                 load_transactions()
@@ -295,11 +346,11 @@ def register_statement_routes(app):
         try:
             result=build()
             if result is None: return jsonify(error='The ledger has changed. Refresh the statement preview.'),409
-            filename=f'MISB_Account_Statement_{result["as_of"]}.pdf';pdf=statement_pdf(result)
+            filename=f'MISB_Account_Statement_{result.get("start_date") + "_to_" if result.get("start_date") else ""}{result["as_of"]}.pdf';pdf=statement_pdf(result)
             from storage import save_statement_report_run
             summary=result.get('summary',{})
             record=save_statement_report_run(result['as_of'],result['version'],filename,{
-                'row_count':result.get('row_count',0),'page_count':result.get('page_count',0),
+                'start_date':result.get('start_date',''),'row_count':result.get('row_count',0),'page_count':result.get('page_count',0),
                 'opening_balance':summary.get('starting_balance',0),'closing_balance':summary.get('ending_balance',0),
                 'gross_returns':summary.get('total_gross_returns',0)})
             audit_event('Generated account statement' if record['created'] else 'Downloaded existing account statement',
@@ -326,7 +377,7 @@ def register_statement_routes(app):
         writer.writerow(('Generated at','Statement through','PDF filename','Rows','Pages','Opening balance (RM)',
                          'Closing balance (RM)','Gross returns (RM)','Source workbook','Source SHA-256',
                          'Source size (bytes)','Source available','Last verified at','Verification result',
-                         'Mismatched fields'))
+                         'Mismatched fields','Period starts'))
         for run in statement_report_runs(500):
             verification=('Never verified' if run['last_verification_matches'] is None else
                           ('Matches' if run['last_verification_matches'] else 'Review mismatch'))
@@ -335,7 +386,7 @@ def register_statement_routes(app):
                              f"{run['gross_returns']:.2f}",run['source_filename'],run['source_sha256'],
                              run['source_byte_size'],'Yes' if run['source_available'] else 'No',
                              run['last_verified_at'] or '',verification,
-                             ', '.join(run['last_verification_mismatches'])))
+                             ', '.join(run['last_verification_mismatches']),run.get('start_date','')))
         data=io.BytesIO(('\ufeff'+output.getvalue()).encode('utf-8'))
         return send_file(data,mimetype='text/csv',as_attachment=True,
                          download_name='MISB_Account_Statement_Register.csv')
@@ -348,7 +399,8 @@ def register_statement_routes(app):
             return jsonify(error='That statement history record was not found.'),404
         try:
             source,_=read_source_version('transactions',run['source_object_key'])
-            result=statement_data(source.read(),run['as_of'])
+            result=statement_data(source.read(),run['as_of'],run.get('start_date') or None,
+                                  run['opening_balance'] if run.get('start_date') else None)
             summary=result.get('summary',{})
             values={
                 'Rows':(int(run['row_count']),int(result['row_count'])),
@@ -379,7 +431,8 @@ def register_statement_routes(app):
         if not run: return jsonify(error='That statement history record was not found.'),404
         try:
             source,_=read_source_version('transactions',run['source_object_key'])
-            result=statement_data(source.read(),run['as_of'])
+            result=statement_data(source.read(),run['as_of'],run.get('start_date') or None,
+                                  run['opening_balance'] if run.get('start_date') else None)
             audit_event('Recreated account statement','report',run['as_of'],{
                 'history_id':run_id,'filename':run['filename'],'source_version':run['source_object_key']})
             response=send_file(statement_pdf(result),mimetype='application/pdf',as_attachment=True,

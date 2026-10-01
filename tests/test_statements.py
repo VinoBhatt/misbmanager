@@ -34,6 +34,48 @@ ROWS=[
 
 
 class StatementTests(unittest.TestCase):
+    def test_monthly_carries_september_second_balance(self):
+        result=statement_data(workbook(ROWS),'2026-09-30','2026-09-03')
+        self.assertEqual(result['summary']['starting_balance'],'901.23')
+        self.assertEqual(result['summary']['ending_balance'],'903.57')
+        self.assertEqual(result['summary']['principal_received'],'0.00')
+        self.assertEqual(result['row_count'],4)
+        self.assertTrue(all(row['date'].startswith('03-Sep') for row in result['rows']))
+        with self.assertRaisesRegex(ValueError,'does not match'):
+            statement_data(workbook(ROWS),'2026-09-30','2026-09-03','999.00')
+
+    def test_monthly_history_reproduces_and_verifies_period(self):
+        with tempfile.TemporaryDirectory() as directory:
+            initialize(Path(directory))
+            with patch.dict(os.environ,{'MISB_DATA_DIR':directory,'MISB_LOCAL_PREVIEW':'1'}):
+                client=app.test_client()
+                response=client.post('/api/account-statement',data={
+                    'file':(io.BytesIO(workbook(ROWS)),'ledger.xlsx'),'as_of':'2026-09-02'})
+                version=response.json['version']
+                client.get('/api/export/account-statement.pdf',query_string={'as_of':'2026-09-02','version':version})
+                params={'mode':'monthly','as_of':'2026-09-30','version':version}
+                preview=client.get('/api/account-statement',query_string=params)
+                self.assertEqual(preview.status_code,200,preview.data)
+                self.assertEqual(preview.json['start_date'],'2026-09-03')
+                self.assertEqual(preview.json['summary']['starting_balance'],'901.23')
+                params['start_date']=preview.json['start_date']
+                exported=client.get('/api/export/account-statement.pdf',query_string=params)
+                self.assertEqual(exported.status_code,200,exported.data[:100])
+                run_id=exported.headers['X-Statement-History-ID']
+                self.assertIn('2026-09-03 TO 2026-09-30',PdfReader(io.BytesIO(exported.data)).pages[0].extract_text())
+                self.assertTrue(client.post(f'/api/account-statement-runs/{run_id}/verify').json['matches'])
+                self.assertEqual(client.get(f'/api/account-statement-runs/{run_id}/pdf').status_code,200)
+                self.assertEqual(client.get('/api/export/account-statement.pdf',query_string=params).headers['X-Statement-History-New'],'0')
+
+    def test_user_example_sst_is_eight_percent_of_platform_fee(self):
+        result=statement_data(workbook([
+            [1,'Profit Payout',78.40,0,78.40,1996,'SUCCESSFUL','02-Sep-2026 12:00:00']]))
+        self.assertEqual(result['summary']['total_gross_returns'],'100.00')
+        self.assertEqual(result['summary']['service_fee'],'20.00')
+        self.assertEqual(result['summary']['sst'],'1.60')
+        self.assertEqual(result['summary']['nett_returns'],'78.40')
+        self.assertEqual([row['amount'] for row in result['rows']],['100.00','-20.00','-1.60','78.40'])
+
     def test_sst_starts_on_first_august_2026(self):
         rows=[
             [1,'Profit Payout',100,0,100,1996,'SUCCESSFUL','31-Jul-2026 23:59:59'],
