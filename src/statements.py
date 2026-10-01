@@ -164,6 +164,20 @@ def statement_data(data, as_of=None, start_date=None, opening_balance=None):
         'row_count':len(detailed),'page_count':1+max(0,(len(detailed)-33+57)//58),'warnings':warnings}
 
 
+def statement_csv(statement):
+    output = io.StringIO(newline='')
+    writer = csv.writer(output)
+    writer.writerow(('Transaction Date', 'Transaction Description', 'Note ID',
+                     'Previous Balance (RM)', 'Sum Involved (RM)', 'Current Balance (RM)'))
+    for row in statement['rows']:
+        # Keep text literal when the CSV is opened in a spreadsheet.
+        cells = [row[key] for key in ('date', 'description', 'note')]
+        cells = ["'" + value if value.lstrip().startswith(('=', '+', '-', '@'))
+                 and value != '-' else value for value in cells]
+        writer.writerow((*cells, row['previous'], row['amount'], row['current']))
+    return io.BytesIO(('\ufeff' + output.getvalue()).encode('utf-8'))
+
+
 def statement_pdf(statement):
     # Lazy imports keep the Worker startup path small.
     from pypdf import PdfReader, PdfWriter
@@ -346,6 +360,21 @@ def register_statement_routes(app):
         except (BadZipFile,openpyxl.utils.exceptions.InvalidFileException):
             return jsonify(error='This file is not a readable Excel workbook.'),400
         except (ValueError,KeyError,StopIteration) as error:
+            return jsonify(error=str(error)),400
+
+    @app.get('/api/export/account-statement.csv')
+    def export_statement_csv():
+        try:
+            result = build()
+            if result is None:
+                return jsonify(error='The ledger has changed. Refresh the statement preview.'),409
+            period = (result['start_date'] + '_to_') if result.get('start_date') else ''
+            filename = f'MISB_Account_Statement_{period}{result["as_of"]}.csv'
+            audit_event('Downloaded account statement CSV', 'report', result['as_of'], {
+                'filename':filename, 'source_version':result['version'], 'rows':result['row_count']})
+            return send_file(statement_csv(result), mimetype='text/csv',
+                             as_attachment=True, download_name=filename)
+        except (ValueError,KeyError) as error:
             return jsonify(error=str(error)),400
 
     @app.get('/api/export/account-statement.pdf')

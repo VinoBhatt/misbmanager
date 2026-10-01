@@ -34,6 +34,32 @@ ROWS=[
 
 
 class StatementTests(unittest.TestCase):
+    def test_csv_download_matches_prepared_monthly_statement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            initialize(Path(directory))
+            with patch.dict(os.environ,{'MISB_DATA_DIR':directory,'MISB_LOCAL_PREVIEW':'1'}):
+                client=app.test_client()
+                uploaded=client.post('/api/account-statement',data={
+                    'file':(io.BytesIO(workbook(ROWS)),'ledger.xlsx')})
+                params={'mode':'monthly','start_date':'2026-09-03',
+                        'as_of':'2026-09-30','version':uploaded.json['version']}
+                preview=client.get('/api/account-statement',query_string=params).json
+                response=client.get('/api/export/account-statement.csv',query_string=params)
+                self.assertEqual(response.status_code,200)
+                self.assertEqual(response.mimetype,'text/csv')
+                self.assertIn('MISB_Account_Statement_2026-09-03_to_2026-09-30.csv',
+                              response.headers['Content-Disposition'])
+                rows=list(csv.reader(io.StringIO(response.data.decode('utf-8-sig'))))
+                self.assertEqual(len(rows),preview['row_count']+1)
+                self.assertEqual(rows[1:],[[row[key] for key in
+                    ('date','description','note','previous','amount','current')]
+                    for row in preview['rows']])
+                self.assertEqual(rows[-1][-1],'903.57')
+                self.assertTrue(any(row[4].startswith('-') for row in rows[1:]))
+                self.assertEqual(client.get('/api/account-statement-runs').json,[])
+                self.assertEqual(client.get('/api/export/account-statement.csv?version=stale').status_code,409)
+                self.assertEqual(client.get('/api/export/account-statement.csv?as_of=invalid').status_code,400)
+
     def test_monthly_carries_september_second_balance(self):
         result=statement_data(workbook(ROWS),'2026-09-30','2026-09-03')
         self.assertEqual(result['summary']['starting_balance'],'901.23')
