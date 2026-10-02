@@ -120,6 +120,9 @@ def calculated_values(record):
 
 def row_values(headers, record, number_value=''):
     values=calculated_values(record)
+    if 'Gross Profit Projected' in headers:
+        from simulation_format import realised_values
+        values.update(realised_values(values['Gross Profit'],[]))
     values['Installment']=(values['Gross Profit Earned']/record['term']
                            if record['payment_type']=='Profit Only' and record['term'] else 'Others')
     values.update({

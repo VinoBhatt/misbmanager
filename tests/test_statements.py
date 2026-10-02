@@ -11,7 +11,7 @@ from pypdf import PdfReader
 
 ROOT=Path(__file__).resolve().parent.parent
 sys.path.insert(0,str(ROOT/'src'));sys.path.insert(0,str(ROOT/'scripts'))
-from statements import statement_data,statement_pdf
+from statements import statement_data,statement_pdf,statement_csv,read_statement_csv
 from app import app
 from local import initialize
 
@@ -34,6 +34,30 @@ ROWS=[
 
 
 class StatementTests(unittest.TestCase):
+    def test_prepared_csv_preview_and_download_preserve_ledger(self):
+        result=statement_data(workbook(ROWS),'2026-09-30','2026-09-03')
+        csv_bytes=statement_csv(result).getvalue()
+        prepared=read_statement_csv(csv_bytes)
+        self.assertEqual(prepared['summary'],result['summary'])
+        self.assertEqual(prepared['row_count'],4)
+        with tempfile.TemporaryDirectory() as directory:
+            initialize(Path(directory))
+            with patch.dict(os.environ,{'MISB_DATA_DIR':directory,'MISB_LOCAL_PREVIEW':'1'}):
+                client=app.test_client()
+                preview=client.post('/api/account-statement',data={
+                    'file':(io.BytesIO(csv_bytes),'September.csv')})
+                self.assertEqual(preview.status_code,200,preview.data)
+                self.assertEqual(preview.json['mode'],'prepared-csv')
+                for format in ('pdf','csv'):
+                    exported=client.post(f'/api/export/account-statement.{format}',data={
+                        'file':(io.BytesIO(csv_bytes),'September.csv')})
+                    self.assertEqual(exported.status_code,200,exported.data[:100])
+                    self.assertEqual(exported.mimetype,'application/pdf' if format=='pdf' else 'text/csv')
+                self.assertEqual(client.get('/api/account-statement-runs').json,[])
+                self.assertEqual(client.get('/api/account-statement').status_code,400)
+                self.assertEqual(client.post('/api/account-statement',data={
+                    'file':(io.BytesIO(b'wrong,headers'),'bad.csv')}).status_code,400)
+
     def test_csv_download_matches_prepared_monthly_statement(self):
         with tempfile.TemporaryDirectory() as directory:
             initialize(Path(directory))
@@ -50,12 +74,14 @@ class StatementTests(unittest.TestCase):
                 self.assertIn('MISB_Account_Statement_2026-09-03_to_2026-09-30.csv',
                               response.headers['Content-Disposition'])
                 rows=list(csv.reader(io.StringIO(response.data.decode('utf-8-sig'))))
-                self.assertEqual(len(rows),preview['row_count']+1)
-                self.assertEqual(rows[1:],[[row[key] for key in
-                    ('date','description','note','previous','amount','current')]
+                detail_start=next(i for i,row in enumerate(rows) if row[0]=='Transaction Date')+1
+                self.assertEqual(len(rows)-detail_start,preview['row_count'])
+                self.assertEqual(rows[4][1],preview['summary']['starting_balance'])
+                self.assertEqual(rows[detail_start:],[[row['date'].split(' ')[0]]+[row[key] for key in
+                    ('note','description','previous','amount','current')]
                     for row in preview['rows']])
                 self.assertEqual(rows[-1][-1],'903.57')
-                self.assertTrue(any(row[4].startswith('-') for row in rows[1:]))
+                self.assertTrue(any(row[4].startswith('-') for row in rows[detail_start:]))
                 self.assertEqual(client.get('/api/account-statement-runs').json,[])
                 self.assertEqual(client.get('/api/export/account-statement.csv?version=stale').status_code,409)
                 self.assertEqual(client.get('/api/export/account-statement.csv?as_of=invalid').status_code,400)
@@ -88,7 +114,7 @@ class StatementTests(unittest.TestCase):
                 exported=client.get('/api/export/account-statement.pdf',query_string=params)
                 self.assertEqual(exported.status_code,200,exported.data[:100])
                 run_id=exported.headers['X-Statement-History-ID']
-                self.assertIn('2026-09-03 TO 2026-09-30',PdfReader(io.BytesIO(exported.data)).pages[0].extract_text())
+                self.assertIn('September 2026',PdfReader(io.BytesIO(exported.data)).pages[0].extract_text())
                 self.assertTrue(client.post(f'/api/account-statement-runs/{run_id}/verify').json['matches'])
                 self.assertEqual(client.get(f'/api/account-statement-runs/{run_id}/pdf').status_code,200)
                 self.assertEqual(client.get('/api/export/account-statement.pdf',query_string=params).headers['X-Statement-History-New'],'0')

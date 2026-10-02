@@ -4,6 +4,7 @@ import zipfile
 from datetime import date, datetime
 import openpyxl
 import re
+from simulation_format import canonical_row, NEW_REQUIRED
 
 
 def validate_workbook(kind, data):
@@ -26,7 +27,8 @@ def validate_workbook(kind, data):
             sheet = wb['Query result']
             headers = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
             required = {'Loan Code','Issuer Name','Investment Amount','Loan Status',
-                        'Paid Principal','Unpaid Principal','Paid Profit','Unpaid Profit'}
+                        'Paid Principal','Unpaid Principal','Unpaid Profit'}
+            required.add('Total Paid Out Profit' if 'Gross Profit Projected' in headers else 'Paid Profit')
         else:
             if not {'Sheet1','Sheet2'}.issubset(wb.sheetnames):
                 raise ValueError('Missing MIDAS sheets')
@@ -39,7 +41,7 @@ def validate_workbook(kind, data):
         if kind == 'simulation':
             legacy={'Gross Profit','Late Profit','Service Fee ','Net Profit'}
             expanded={'Gross Profit Earned','Total Gross Profit','Late Payment Charges','Service Fee ','SST','Net Profit','Installment'}
-            if not (legacy.issubset(set(headers)) or expanded.issubset(set(headers))):
+            if not (legacy.issubset(set(headers)) or expanded.issubset(set(headers)) or NEW_REQUIRED.issubset(set(headers))):
                 raise ValueError('The simulation profit columns are not a supported format')
         if (sheet.max_row or 0) > 50000 or (sheet.max_column or 0) > 500:
             raise ValueError('Workbook dimensions exceed supported limits')
@@ -168,13 +170,13 @@ def inspect_workbook(kind, data, current=None):
                 source_comparison.update(requires_acknowledgement=bool(reasons),regression_reasons=reasons)
         elif kind=='simulation':
             ws=wb['Query result'];headers=next(ws.iter_rows(min_row=1,max_row=1,values_only=True))
-            rows=[dict(zip(headers,values)) for values in ws.iter_rows(min_row=2,values_only=True)
+            rows=[canonical_row(dict(zip(headers,values))) for values in ws.iter_rows(min_row=2,values_only=True)
                   if values and values[0] is not None and values[1]]
             codes=[str(row.get('Loan Code') or '').strip().upper() for row in rows]
             duplicates=len(codes)-len(set(codes))
             missing_issuers=sum(not str(row.get('Issuer Name') or '').strip() for row in rows)
             invalid_amounts=sum(not isinstance(row.get('Investment Amount'),(int,float)) or row.get('Investment Amount',0)<0 for row in rows)
-            stats.update(rows=len(rows),format=('Expanded profit' if 'Total Gross Profit' in headers else 'Original'))
+            stats.update(rows=len(rows),format=('Projected / realised profit' if 'Gross Profit Projected' in headers else 'Expanded profit' if 'Total Gross Profit' in headers else 'Original'))
             if duplicates: issue('error','Duplicate loan codes',duplicates)
             if missing_issuers: issue('warning','Notes without an issuer name',missing_issuers)
             if invalid_amounts: issue('error','Notes with invalid investment amounts',invalid_amounts)

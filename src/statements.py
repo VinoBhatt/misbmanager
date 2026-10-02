@@ -1,6 +1,7 @@
 """MISB PDF statements: exact decimal ledger amounts and reference artwork."""
 import io
 import csv
+import calendar
 from zipfile import BadZipFile
 from datetime import datetime, date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -96,6 +97,7 @@ def statement_data(data, as_of=None, start_date=None, opening_balance=None):
             if not fee:
                 continue
             r['description'] = 'Withdrawal Fee'
+            r['amount'] = -abs(r['amount'])
         if action in ('Deposit Approved', 'Withdrawal Approved'):
             r['description'] = action.removesuffix(' Approved')
             if r['note'] == '-':
@@ -164,14 +166,87 @@ def statement_data(data, as_of=None, start_date=None, opening_balance=None):
         'row_count':len(detailed),'page_count':1+max(0,(len(detailed)-33+57)//58),'warnings':warnings}
 
 
+def read_statement_csv(data):
+    """Read a prepared monthly statement without replacing the full transaction ledger."""
+    if len(data)>10*1024*1024: raise ValueError('Statement exceeds 10 MB')
+    try:
+        table=list(csv.reader(io.StringIO(data.decode('utf-8-sig'))))
+    except (UnicodeError,csv.Error):
+        raise ValueError('This is not a readable UTF-8 statement CSV') from None
+    headers=('Transaction Date','Note ID','Transaction Description',
+             'Previous Balance (RM)','Sum Involved (RM)','Current Balance (RM)')
+    index=next((i for i,row in enumerate(table) if tuple(row)==headers),None)
+    if index is None: raise ValueError('The CSV must use the September monthly statement column headings')
+    def amount(value):
+        value=value.strip().replace(',','')
+        if value.startswith('(') and value.endswith(')'): value='-'+value[1:-1]
+        return format(money(value),'.2f') if value else ''
+    rows=[];days=[]
+    for values in table[index+1:]:
+        if not any(value.strip() for value in values): continue
+        if len(values)!=6: raise ValueError('Statement CSV rows must have six columns')
+        try: day=datetime.strptime(values[0].strip(),'%d-%b-%Y').date()
+        except ValueError: raise ValueError('Statement CSV transaction dates must be DD-Mon-YYYY') from None
+        days.append(day)
+        rows.append(dict(zip(('date','note','description','previous','amount','current'),
+            (values[0].strip(),values[1].strip(),values[2].strip(),
+             amount(values[3]),amount(values[4]),amount(values[5])))))
+    if not rows or len(rows)>10000: raise ValueError('Statement CSV must contain between 1 and 10,000 detail rows')
+    labels={'Starting Balance':'starting_balance','Ending Balance':'ending_balance',
+            'Total Investment':'total_investment','Total Principal Received':'principal_received',
+            'Total Gross Returns Received':'total_gross_returns','Service Fee':'service_fee',
+            'SST':'sst','Total Nett Returns Received':'nett_returns'}
+    summary={};investor_id='';investor_name=''
+    for values in table[:index]:
+        if len(values)!=6: continue
+        if values[0]=='INVESTOR ID': investor_id=values[2].strip()
+        if values[0]=='INVESTOR NAME': investor_name=values[2].strip()
+        for label,value in ((values[0],values[1]),(values[3],values[5])):
+            if label.strip() in labels: summary[labels[label.strip()]]=amount(value)
+    if set(summary)!=set(labels.values()) or any(value=='' for value in summary.values()):
+        raise ValueError('Statement CSV is missing account summary amounts')
+    if not investor_id or not investor_name: raise ValueError('Statement CSV is missing investor details')
+    if investor_id!='5490' or investor_name!='Amanahraya Trustees Berhad':
+        raise ValueError('This statement generator supports MISB investor 5490, Amanahraya Trustees Berhad')
+    if any(day.year!=days[0].year or day.month!=days[0].month for day in days):
+        raise ValueError('Prepared statement CSV must cover one calendar month')
+    warnings=[];balance=summary['starting_balance']
+    for row in rows:
+        if row['previous'] and row['previous']!=balance:
+            warnings.append('The prepared statement contains a balance discontinuity. Original balances and row order are preserved.')
+            break
+        if row['current']: balance=row['current']
+    return {'start_date':days[0].replace(day=1).isoformat(),
+        'as_of':days[0].replace(day=calendar.monthrange(days[0].year,days[0].month)[1]).isoformat(),
+        'investor_id':investor_id,'investor_name':investor_name,'summary':summary,'rows':rows,
+        'row_count':len(rows),'page_count':1+max(0,(len(rows)-33+57)//58),
+        'warnings':warnings,'mode':'prepared-csv','version':'',
+        'opening_source':'Prepared monthly statement; the workspace transaction ledger is unchanged'}
+
+
 def statement_csv(statement):
     output = io.StringIO(newline='')
     writer = csv.writer(output)
-    writer.writerow(('Transaction Date', 'Transaction Description', 'Note ID',
+    cutoff=date.fromisoformat(statement['as_of'])
+    title=f'ACCOUNT STATEMENT ({MONTHS[cutoff.month-1]} {cutoff.year})' if statement.get('start_date') else f'ACCOUNT STATEMENT (through {statement["as_of"]})'
+    writer.writerow((title, '', '', '', '', ''))
+    writer.writerow(('INVESTOR ID', '', statement['investor_id'], '', '', ''))
+    writer.writerow(('INVESTOR NAME', '', statement['investor_name'], '', '', ''))
+    writer.writerow(('ACCOUNT SUMMARY', 'RM', '', 'ACCOUNT SUMMARY', '', 'RM'))
+    left=(('Starting Balance','starting_balance'),('Ending Balance','ending_balance'),
+          ('Total Investment','total_investment'),('Total Principal Received','principal_received'),
+          ('Total Gross Returns Received','total_gross_returns'))
+    right=(('Service Fee','service_fee'),('SST','sst'),('Total Nett Returns Received','nett_returns'))
+    for index,(label,key) in enumerate(left):
+        second=right[index] if index<len(right) else ('','')
+        writer.writerow((label,statement['summary'][key],'',second[0],'',statement['summary'].get(second[1],'')))
+    writer.writerow(('', '', '', '', '', ''))
+    writer.writerow(('DETAILED ACCOUNT STATEMENT', '', '', '', '', ''))
+    writer.writerow(('Transaction Date', 'Note ID', 'Transaction Description',
                      'Previous Balance (RM)', 'Sum Involved (RM)', 'Current Balance (RM)'))
     for row in statement['rows']:
         # Keep text literal when the CSV is opened in a spreadsheet.
-        cells = [row[key] for key in ('date', 'description', 'note')]
+        cells = [row['date'].split(' ')[0], row['note'], row['description']]
         cells = ["'" + value if value.lstrip().startswith(('=', '+', '-', '@'))
                  and value != '-' else value for value in cells]
         writer.writerow((*cells, row['previous'], row['amount'], row['current']))
@@ -238,14 +313,18 @@ def statement_pdf(statement):
     cutoff=date.fromisoformat(statement['as_of'])
     title=f'ACCOUNT STATEMENT (YEAR TO DAY- {cutoff.day} {MONTHS[cutoff.month-1]} {cutoff:%y})'
     if statement.get('start_date'):
-        title=f'ACCOUNT STATEMENT ({statement["start_date"]} TO {statement["as_of"]})'
+        title=f'ACCOUNT STATEMENT ({MONTHS[cutoff.month-1]} {cutoff.year})' if statement['start_date'][:7]==statement['as_of'][:7] else f'ACCOUNT STATEMENT ({statement["start_date"]} TO {statement["as_of"]})'
     first_ops=text(title,302.5,190.8,11.4,'/T2','center')
     for key,y in zip(('starting_balance','ending_balance','total_investment','principal_received','total_gross_returns'),(261.96,273.60,285.24,296.88,308.52)):
         first_ops+=text(format(Decimal(statement['summary'][key]),',.2f'),312.95,y,7.56,font='/F1',align='right')
     for key,y in zip(('service_fee','sst','nett_returns'),(261.96,273.60,285.24)):
         first_ops+=text(format(Decimal(statement['summary'][key]),',.2f'),550.33,y,7.56,font='/F1',align='right')
+    # Draw the new Date / Note ID / Description heading over the previous artwork.
+    first_ops+='0.02 0.12 0.36 rg 50.964 438.36 309.766 19.0 re f\n'
+    for label,x in (('Transaction Date',100),('Note ID',178),('Transaction Description',270)):
+        first_ops+=text(label,x,348.6,6.96,'/F1','center').replace('BT 0 g','BT 1 g')
     all_rows=statement['rows']; groups=[all_rows[:33]]+[all_rows[i:i+58] for i in range(33,len(all_rows),58)]
-    columns=(50.964,170.65,315.85,360.73,418.45,487.21,553.5)
+    columns=(50.964,151.0,205.0,360.73,418.45,487.21,553.5)
 
     def display_amount(value):
         if value == '': return ''
@@ -265,7 +344,7 @@ def statement_pdf(statement):
             ops+=f'{columns[0]} {y:.4f} m {columns[-1]} {y:.4f} l S\n'
         for i,row in enumerate(rows):
             y=(360.60 if page_index==0 else 62.52)+11.64*i
-            for value,left,right in zip((row['date'],row['description'],row['note']),columns[:3],columns[1:4]):
+            for value,left,right in zip((row['date'].split(' ')[0],row['note'],row['description']),columns[:3],columns[1:4]):
                 size=min(6.96,6.96*(right-left-3)/max(1,width(value,'/F1',6.96)))
                 ops+=text(value,(left+right)/2,y,size,font='/F1',align='center')
             for key,right in zip(('previous','amount','current'),(409.35,486.85,550.40)):
@@ -324,6 +403,9 @@ def register_statement_routes(app):
     @app.route('/api/account-statement',methods=['GET','POST'])
     def preview_statement():
         try:
+            file=request.files.get('file')
+            if file and file.filename.lower().endswith('.csv'):
+                return jsonify(read_statement_csv(file.read()))
             if request.method=='POST':
                 file=request.files.get('file')
                 if not file or not file.filename.lower().endswith('.xlsx'):
@@ -362,10 +444,10 @@ def register_statement_routes(app):
         except (ValueError,KeyError,StopIteration) as error:
             return jsonify(error=str(error)),400
 
-    @app.get('/api/export/account-statement.csv')
+    @app.route('/api/export/account-statement.csv',methods=['GET','POST'])
     def export_statement_csv():
         try:
-            result = build()
+            result = read_statement_csv(request.files['file'].read()) if request.method=='POST' and 'file' in request.files else build()
             if result is None:
                 return jsonify(error='The ledger has changed. Refresh the statement preview.'),409
             period = (result['start_date'] + '_to_') if result.get('start_date') else ''
@@ -377,9 +459,13 @@ def register_statement_routes(app):
         except (ValueError,KeyError) as error:
             return jsonify(error=str(error)),400
 
-    @app.get('/api/export/account-statement.pdf')
+    @app.route('/api/export/account-statement.pdf',methods=['GET','POST'])
     def export_statement_pdf():
         try:
+            if request.method=='POST' and 'file' in request.files:
+                result=read_statement_csv(request.files['file'].read())
+                filename=f'MISB_Account_Statement_{result["start_date"]}_to_{result["as_of"]}.pdf'
+                return send_file(statement_pdf(result),mimetype='application/pdf',as_attachment=True,download_name=filename)
             result=build()
             if result is None: return jsonify(error='The ledger has changed. Refresh the statement preview.'),409
             filename=f'MISB_Account_Statement_{result.get("start_date") + "_to_" if result.get("start_date") else ""}{result["as_of"]}.pdf';pdf=statement_pdf(result)

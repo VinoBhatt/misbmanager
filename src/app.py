@@ -7,6 +7,8 @@ from storage import (connect, read_source, source_exists, source_rows, save_sour
                      read_parsed_source, save_parsed_source, source_versions,
                      select_source_version, audit_event, audit_rows)
 
+from simulation_format import canonical_row, column_positions, realised_values
+
 app = Flask(__name__, static_folder=None)
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 
@@ -66,7 +68,7 @@ def load_transactions():
         base=[]
         for vals in ws.iter_rows(min_row=3,values_only=True):
             if not any(v is not None for v in vals): continue
-            r=dict(zip(headers,vals))
+            r=canonical_row(dict(zip(headers,vals)))
             base.append({
                 'id': r.get('ID'), 'action': r.get('Action') or '', 'amount': num(r.get('Sum Involved(MYR)')),
                 'previous_balance': num(r.get('Previous Balance(MYR)')), 'current_balance': num(r.get('Current Balance(MYR)')),
@@ -103,7 +105,7 @@ def load_simulation():
     for vals in ws.iter_rows(min_row=2,values_only=True):
         if not vals or vals[0] is None or not vals[1]: continue
         display_rows.append(list(vals[:len(display_headers)]))
-        r=dict(zip(headers,vals))
+        r=canonical_row(dict(zip(headers,vals)))
         expanded_profit='Total Gross Profit' in r
         gross_earned=num(r.get('Gross Profit Earned')) if expanded_profit else num(r.get('Gross Profit'))
         total_gross=num(r.get('Total Gross Profit')) if expanded_profit else num(r.get('Gross Profit'))
@@ -125,7 +127,12 @@ def load_simulation():
             'service_fee': num(r.get('Service Fee ')),
             'early_repayment': r.get('Early Repayment') or '', 'early_date': iso(r.get('Early Repayment Date')), 'remarks': r.get('Remarks') or ''
         }
-        if expanded_profit:
+        if 'Gross Profit Projected' in r:
+            item.update({'gross_profit_earned':num(r.get('Total Gross Profit Earned')),
+                         'sst':num(r.get('SST Charged')), 'report_format':'projected-realised',
+                         'net_late_sst':num(r.get('Net Late Payment Charges (SST Affected)')),
+                         'net_late_non_sst':num(r.get('Net Late Payment Charges (Non SST Affected)'))})
+        elif expanded_profit:
             item.update({'gross_profit_earned':gross_earned,'sst':num(r.get('SST')),
                          'installment':r.get('Installment'),'report_format':'expanded-profit'})
         portfolio.append(item)
@@ -914,7 +921,7 @@ SIMULATION_COMPARE_FIELDS=('Loan Status','Investment Amount','Paid Principal','U
 
 
 def compact_simulation_snapshot(headers, rows):
-    positions={name:headers.index(name) for name in ('Loan Code',)+SIMULATION_COMPARE_FIELDS if name in headers}
+    positions=column_positions(headers,('Loan Code',)+SIMULATION_COMPARE_FIELDS)
     if 'Loan Code' not in positions: return {}
     result={}
     for row in rows:
@@ -965,7 +972,7 @@ def simulation_update_snapshot(as_of=None, include_drafts=False, compare_to=None
         tawidh=sum(num(t.get('amount')) for t in note_tx if t.get('action')=='Profit Payout' and ('tawidh' in str(t.get('transaction_no') or '').lower() or "ta'widh" in str(t.get('transaction_no') or '').lower()))
         profit_tx=[t for t in note_tx if t.get('action')=='Profit Payout']
         all_profit=sum(num(t.get('amount')) for t in profit_tx)
-        paid_profit=all_profit if r.get('report_format')=='expanded-profit' else all_profit-tawidh
+        paid_profit=all_profit if r.get('report_format') in ('expanded-profit','projected-realised') else all_profit-tawidh
         unpaid_principal=max(0,inv-paid_principal)
         settlement=None; running=0.0
         principal_events=[]
@@ -1028,6 +1035,9 @@ def simulation_update_snapshot(as_of=None, include_drafts=False, compare_to=None
             'Early Repayment':'Early Repayment of Principal' if early else (r.get('early_repayment','') if not completed else ''),
             'Early Repayment Date':settlement.isoformat() if early and settlement else (r.get('early_date') if not completed else None),
         }
+        if r.get('report_format')=='projected-realised':
+            updates[code].update(realised_values(original_gross,profit_tx,early))
+            updates[code]['Actual Repayment **']=paid_principal+all_profit
     # load_simulation caches the displayed rows for this request, avoiding a
     # second OpenPyXL parse of the same workbook on CPU-limited Workers.
     displayed=g.simulation_display;headers=displayed['headers']
@@ -1073,7 +1083,7 @@ def simulation_update_snapshot(as_of=None, include_drafts=False, compare_to=None
             'gross_profit_earned':values.get('Gross Profit Earned',0),'service_fee':values.get('Service Fee ',0),
             'late_profit':0,'loan_status':record.get('status','Active'),'installment':values.get('Installment',''),
             'early_repayment':'','early_date':None,
-            'report_format':'expanded-profit' if 'Total Gross Profit' in headers else 'legacy'
+            'report_format':'projected-realised' if 'Gross Profit Projected' in headers else 'expanded-profit' if 'Total Gross Profit' in headers else 'legacy'
         }
         # Reuse the same servicing calculation as historical rows by calculating
         # this entry against its ledger activity before it is appended.
@@ -1111,6 +1121,9 @@ def simulation_update_snapshot(as_of=None, include_drafts=False, compare_to=None
             'Late Payment Charges':late_charge,'Service Fee ':service_fee,'SST':sst,
             'Early Repayment':'Early Repayment of Principal' if early else '',
             'Early Repayment Date':settlement.isoformat() if early and settlement else None}
+        if synthetic['report_format']=='projected-realised':
+            updates[code].update(realised_values(original_gross,profit_tx,early))
+            updates[code]['Actual Repayment **']=paid_principal+all_profit
         arr=row_values(headers,record,len(rows)+1)
         for index,header in enumerate(headers):
             if header in updates[code]: arr[index]=updates[code][header]
@@ -1130,11 +1143,11 @@ def simulation_update_snapshot(as_of=None, include_drafts=False, compare_to=None
                       'approval_status':record.get('approval_status','Draft')}
                      for code,record in sorted(all_saved_allocations.items())
                      if record.get('approval_status') not in ('Approved','Disbursed','Cancelled')]
-    positions={header:headers.index(header) for header in ('Loan Code','Issuer Name','Investment Amount','Paid Principal','Unpaid Principal','Paid Profit','Unpaid Profit','SST') if header in headers}
+    positions=column_positions(headers,('Loan Code','Issuer Name','Investment Amount','Paid Principal','Unpaid Principal','Paid Profit','Unpaid Profit','SST','Gross Profit','Gross Profit Earned','Net Profit','Service Fee '))
     def total(field):
         index=positions.get(field)
         return sum(num(row[index]) for row in rows if index is not None and index<len(row))
-    report_totals={field:total(field) for field in ('Investment Amount','Paid Principal','Unpaid Principal','Paid Profit','Unpaid Profit','SST')}
+    report_totals={field:total(field) for field in ('Investment Amount','Paid Principal','Unpaid Principal','Paid Profit','Unpaid Profit','SST','Gross Profit','Gross Profit Earned','Net Profit','Service Fee ')}
     report_totals['new_allocation']=sum(num(item.get('investment_amount')) for item in added_entries)
     issues=[]
     if 'Loan Code' not in positions:
@@ -1193,6 +1206,7 @@ def simulation_update_snapshot(as_of=None, include_drafts=False, compare_to=None
             'report_totals':report_totals,'validation':validation,
             'capacity':{'issuer_limit':issuer_limit,'issuer_exposure':issuer_exposure,
                         'available_cash':available_cash,'uncommitted_new_allocations':uncommitted},
+            'report_format':'projected-realised' if 'Gross Profit Projected' in headers else 'legacy',
             'as_of':as_of or (max([t.get('date') for t in tx if t.get('date')],default=''))}
     result['comparison']=None if include_drafts else simulation_comparison(headers,rows,compare_to)
     return result
@@ -1209,6 +1223,19 @@ def build_updated_simulation_workbook(as_of=None, snap=None):
         code=normalize_note_code(ws.cell(row,2).value)
         up=snap['updates'].get(code)
         if not up: continue
+        if up.get('_new_logic'):
+            for field in ('Loan Status','Paid Principal','Early Repayment','Early Repayment Date',
+                          'Net Late Payment Charges (SST Affected)', 'Net Late Payment Charges (Non SST Affected)',
+                          'SST Net Profit (After 1 Aug)', 'Non SST Net Profit (Before 1 Aug)',
+                          'Email on Allocation','Email on Disbursement'):
+                if field in hidx and field in up:
+                    value=up[field]
+                    if field=='Early Repayment Date' and value: value=parse_date(value)
+                    ws.cell(row,hidx[field]).value=value
+            # Preserve projection and actual-return formulas; correct unpaid profit consistently.
+            col=lambda field:f'{openpyxl.utils.get_column_letter(hidx[field])}{row}'
+            ws.cell(row,hidx['Unpaid Profit']).value=f'=IF({col("Early Repayment")}<>"",0,MAX(0,{col("Total Net Profit Projected")}-{col("Total Paid Out Profit")}))'
+            continue
         # Inputs sourced from the ledger. Derived cells retain the template's formula-driven style.
         input_fields=['Loan Status','Paid Principal','Paid Profit','Late Profit','Early Repayment','Early Repayment Date']
         input_fields.append('SST')

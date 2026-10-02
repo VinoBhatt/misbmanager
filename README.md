@@ -2,7 +2,7 @@
 
 A password-protected fund management website for Cloudflare Workers, adapted from the original MISB Fund Tracker. Keeps the original portfolio calculations and Excel workflows.
 
-Includes Fund Overview, Issuer Exposure, Receivables, Profit Analytics, Active Portfolio, Account & Ledger, Cash Projection, Monitoring, MISB Reports, Account Statement PDF, New Note Allocation, Allocation Email, Simulation Copy, and Data Sources.
+Includes Fund Overview, Issuer Exposure, Receivables, Profit Analytics, Active Portfolio, Account & Ledger, Cash Projection, Monitoring, MISB Reports, Account Statement, New Note Allocation, Allocation Email, Simulation Copy, and Data Sources.
 
 ## Architecture
 
@@ -135,11 +135,11 @@ Use this once on a new database before editing cloud records. It imports monitor
 
 ## Workbook handling
 
-### Account Statement PDF
+### Account Statement
 
-Open **Account Statement PDF**, upload the Cofundr transaction-log `.xlsx`, choose an inclusive cut-off date (or leave it blank for the latest transaction date), and click **Prepare statement**. Review the summary and select **Download account statement PDF**. Uploads replace the workspace transaction ledger and retain the previous workbook version in D1.
+Open **Account Statement**, upload the Cofundr transaction-log `.xlsx`, choose an inclusive cut-off date (or leave it blank for the latest transaction date), and click **Prepare statement**. Review the summary and select **Download account statement PDF**. Uploads replace the workspace transaction ledger and retain the previous workbook version in D1.
 
-The PDF follows the supplied `MISB Account Statement (YTD 2 September).pdf`: US Letter pages, embedded Calibri fonts, Cofundr letterhead, investor 5490 / Amanahraya Trustees Berhad, the two-part account summary, and the original six-column table. The first page holds 33 detail rows and continuation pages hold 58, without repeating the header. Despite the reference title saying "YEAR TO DAY", it includes activity since October 2025; the generator likewise includes all completed entries in the supplied log through the chosen cut-off, not just the current calendar year.
+The PDF uses the September 2026 monthly format with the original MISB letterhead: US Letter pages, embedded Calibri fonts, Cofundr letterhead, investor 5490 / Amanahraya Trustees Berhad, the two-part account summary, and the six-column table ordered by date, note ID, description, and balances. The first page holds 33 detail rows and continuation pages hold 58, without repeating the header. Despite the reference title saying "YEAR TO DAY", it includes activity since October 2025; the generator likewise includes all completed entries in the supplied log through the chosen cut-off, not just the current calendar year.
 
 Amounts use decimal arithmetic. Each Excel Profit Payout becomes Gross Profit, Service Charge and Net Profit rows. Gross profit is derived from the Excel net payout using a 20% service charge. From 1 August 2026 onward, an SST row deducts 8% of the service charge, matching the supplied statement. The Excel net payout and closing balance remain authoritative when individually rounded components differ by one sen. The summary reports gross returns, service fees, SST and net returns.
 
@@ -211,3 +211,10 @@ Apply database migration `0012_allocation_email_tracking.sql` before deploying t
 In **Campaign Entries**, use **Reuse issuer details** to choose an issuer from saved campaigns or the simulation report. This fills the issuer name, company ID, business description, note type and payment type, while leaving new-note amounts, dates, rate and tenure untouched. Saved campaign details take precedence over historical rows. Choose **Other / new issuer** to enter new company details; saving the campaign makes that issuer available in the dropdown. All copied fields remain editable.
 
 Monthly account statements: choose **Monthly / next statement period** on Account Statement, upload the latest transaction workbook, and set the closing date. Leaving the start date blank continues on the day after the most recent earlier generated statement. If no earlier report is recorded, the first period starts on 3 September 2026 and carries the preceding completed ledger balance forward. You can set explicit start and closing dates for subsequent calendar months. Opening balances must match the first transaction; missing ledger movements stop generation. Saved periods are included in statement history and the CSV register, and are preserved when verifying or recreating PDFs. Apply migration `0013_monthly_statements.sql` before releasing this feature.
+
+
+### September 2026 document formats
+
+The Simulation Generator supports the September **New Logic** workbook as well as the older templates. Import the new `.xlsx` through Data Sources with its snapshot date. Original gross and net projections remain separate from gross profit earned, actual service fees, SST, paid net profit, and late charges split by SST applicability. The generated workbook keeps the Logic Explanation and schedule sheets, styling, remarks, and projection formulas. Actual payouts update the four SST/non-SST profit and late-charge inputs. Unpaid profit follows the written explanation: projected net minus paid net, floored at zero; fully settled early repayments show zero. No additional SST deduction is applied to unpaid profit.
+
+Account Statement accepts the prepared September monthly `.csv` in addition to transaction-log `.xlsx` files. Prepared CSVs retain their summary, balances, amounts, and original row order; they do not replace the transaction ledger or create ledger-backed history records. PDF and CSV downloads use Date, Note ID, Description, Previous Balance, Sum Involved, and Current Balance. The CSV includes investor details and the account summary. Balance discontinuities in a prepared statement appear as warnings, while the source figures remain intact. Monthly statement titles use the calendar month and year.
